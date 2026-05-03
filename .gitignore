@@ -1,0 +1,27 @@
+# Runtime state and logs contain private bookmark/tab URLs.
+state.json
+state.json.tmp
+sync.log
+*.log
+
+# Local Safari backups created before plist writes.
+Bookmarks.plist.bak
+*.bak
+*.tmp
+*.pre-cleanup
+*.pre-migrate
+
+# Personal one-off migration artifacts.
+migrate-preview.json
+migrate.py
+backfill_dates.py
+
+# Python/cache/editor noise.
+__pycache__/
+*.py[cod]
+.DS_Store
+.idea/
+.vscode/
+
+# Local native messaging manifests if copied into the repo.
+com.local.safari_bookmark_sync.json

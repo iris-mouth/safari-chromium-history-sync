@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Safari Bookmark Sync",
+  "version": "4.9",
+  "description": "Bidirectional sync with folder structure preservation (reconciliation loop)",
+  "permissions": [
+    "bookmarks",
+    "nativeMessaging",
+    "readingList",
+    "storage",
+    "alarms",
+    "tabs",
+    "tabGroups",
+    "windows"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  }
+}
