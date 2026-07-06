@@ -3,13 +3,18 @@ state.json
 state.json.tmp
 sync.log
 *.log
+backups/
 
 # Local Safari backups created before plist writes.
 Bookmarks.plist.bak
+Bookmarks-*.plist
 *.bak
 *.tmp
 *.pre-cleanup
 *.pre-migrate
+
+# Runtime directory if SAFARI_SYNC_STATE_DIR points into the checkout.
+Safari Sync/
 
 # Personal one-off migration artifacts.
 migrate-preview.json

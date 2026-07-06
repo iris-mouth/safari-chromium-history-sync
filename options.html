@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Safari Sync Options</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <h1>Safari Sync</h1>
+      <p id="saveStatus">Options</p>
+    </header>
+
+    <form id="optionsForm">
+      <section>
+        <h2>Direction</h2>
+        <label class="field">
+          <span>Sync mode</span>
+          <select id="direction">
+            <option value="bidirectional">Bidirectional</option>
+            <option value="chrome_to_safari">Chrome to Safari</option>
+            <option value="safari_to_chrome">Safari to Chrome</option>
+          </select>
+        </label>
+      </section>
+
+      <section>
+        <h2>Sources</h2>
+        <label class="check">
+          <input id="syncHistory" type="checkbox">
+          <span>History</span>
+        </label>
+        <label class="check">
+          <input id="syncReadingList" type="checkbox">
+          <span>Reading List</span>
+        </label>
+        <label class="check">
+          <input id="syncTabGroups" type="checkbox">
+          <span>Tab Groups</span>
+        </label>
+        <label class="check">
+          <input id="syncOpenTabs" type="checkbox">
+          <span>Open Tabs</span>
+        </label>
+      </section>
+
+      <section>
+        <h2>Generated Folders</h2>
+        <label class="field">
+          <span>Open tabs folder</span>
+          <input id="openTabsFolderName" type="text" autocomplete="off">
+        </label>
+        <label class="field">
+          <span>Tab groups folder</span>
+          <input id="tabGroupsFolderName" type="text" autocomplete="off">
+        </label>
+      </section>
+
+      <div class="actions">
+        <button type="submit">Save Options</button>
+        <button id="resetDefaults" type="button" class="secondary">Reset Defaults</button>
+      </div>
+    </form>
+  </main>
+
+  <script src="options.js"></script>
+</body>
+</html>
