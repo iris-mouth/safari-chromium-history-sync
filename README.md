@@ -1,24 +1,39 @@
-# Safari Bookmark Sync
+# Safari Sync
 
-Local bookmark sync for Safari and Chromium-based browsers on macOS.
+Safari Sync is a local macOS bridge that keeps Safari and Chromium-family browsers closer to the same browsing state. It syncs bookmarks, Favorites, Reading List entries, tab mirrors, tab groups, and history between Safari's local data stores and a Chromium extension.
 
-This is an unpacked Manifest V3 extension plus a small native messaging host. It watches Chromium bookmarks, Safari's bookmark plist, tab groups, and open tabs, then reconciles them into a shared bookmark structure.
+It was built for people who use a Chromium browser day to day but still rely on Safari and iCloud to make bookmarks and history available on iPhone, iPad, and other Macs. The intent is to make Safari reflect what you do in Chromium without needing Safari open, while still keeping the implementation inspectable and self-hosted.
 
-It is not a Chrome Web Store extension and it does not use a cloud service.
+This is not a cloud service and it is not a Chrome Web Store package. It is an unpacked Manifest V3 extension plus a Python native messaging host.
 
-## What It Syncs
+## Why This Exists
+
+Apple does not provide a public API for third-party browsers to write Safari bookmarks, Reading List, iCloud Tabs, or Safari history. Chromium also does not provide APIs that perfectly preserve external history timestamps when adding visits back into Chromium.
+
+Safari Sync takes the pragmatic local route:
+
+- A Chromium extension observes Chromium bookmarks, history, tabs, tab groups, and Reading List entries.
+- A native messaging host reads and writes Safari's local bookmark plist and history database.
+- Safari/iCloud then decides when those local Safari changes propagate to other Apple devices.
+
+The project is useful when Safari is your cross-device source of truth, but another Chromium browser is where most browsing actually happens.
+
+## Current Scope
 
 - Safari bookmarks <-> Chromium bookmarks
 - Safari Favorites <-> Chromium Bookmarks Bar
 - Safari regular bookmarks <-> Chromium Other Bookmarks
-- Chromium tab groups -> Safari folders under `Tab Groups`
-- Chromium open tabs -> Safari folders under `Open Tabs / <Browser>`
+- Safari Reading List <-> Chromium Reading List, when the browser exposes the API
+- Chromium history -> Safari history with original visit timestamps where Chromium exposes them
+- New Safari history visits -> Chromium history while the Chromium browser and extension are active
+- Chromium tab groups -> generated Safari folders under `Tab Groups`
+- Chromium open tabs -> generated Safari folders under `Open Tabs / <Browser>`
 
-`Open Tabs` and `Tab Groups` are generated Safari folders. They are intentionally not pushed back into Chromium as normal bookmarks.
+Generated `Open Tabs` and `Tab Groups` folders are intentionally not pushed back into Chromium as normal bookmarks.
 
 ## Supported Browsers
 
-The installer includes native messaging paths for:
+The installer knows the native messaging locations for:
 
 - Google Chrome
 - Google Chrome Beta
@@ -29,15 +44,14 @@ The installer includes native messaging paths for:
 - Arc
 - Helium
 
-Other Chromium browsers may work if you add their native messaging host directory to `setup.sh`.
+Other Chromium browsers can work if you add their native messaging host directory to `setup.sh`.
 
 ## Requirements
 
-- macOS
-- Safari
+- macOS with Safari installed
 - Python 3
-- Node.js only for development checks
 - A Chromium-based browser with unpacked extension support and native messaging
+- Node.js only for development checks
 
 ## Install
 
@@ -62,64 +76,94 @@ Install the native messaging host:
 ./setup.sh
 ```
 
-Paste the extension ID when prompted, then reload the extension from `chrome://extensions`.
+Paste the extension ID when prompted. If multiple browsers show different extension IDs for the unpacked extension, paste all IDs separated by spaces or commas.
 
-## Files It Touches
+Reload the extension from `chrome://extensions`.
 
-Safari stores bookmarks here:
+## Runtime Files
+
+By default, runtime state, logs, and Safari bookmark backups are stored in:
+
+```text
+~/Library/Application Support/Safari Sync
+```
+
+The native host reads and writes:
 
 ```text
 ~/Library/Safari/Bookmarks.plist
+~/Library/Safari/History.db
 ```
 
-The native host reads and writes that file. Before each write, it saves a backup next to the original plist.
+You can override paths for testing:
 
-Runtime state is stored beside the scripts by default:
-
-```text
-state.json
-sync.log
+```sh
+SAFARI_SYNC_STATE_DIR=/tmp/safari-sync-state \
+SAFARI_BOOKMARKS_PATH=/tmp/Bookmarks.plist \
+SAFARI_HISTORY_PATH=/tmp/History.db \
+./run.sh
 ```
-
-These files contain private URLs and are ignored by Git.
 
 ## Configuration
 
-Most installs do not need configuration. The native host supports these environment variables:
+The popup shows native-host status, last sync counts, a manual **Sync Now** button, pause/resume, and recent activity.
+
+The options page supports:
+
+- Bidirectional, Chromium -> Safari, or Safari -> Chromium modes
+- History sync on/off
+- Reading List sync on/off
+- Chromium tab group mirroring on/off
+- Chromium open tab mirroring on/off
+- Custom generated folder names for open tabs and tab groups
+
+Run the setup doctor when sync is not starting:
 
 ```sh
-SAFARI_SYNC_STATE_DIR=/path/to/state
-SAFARI_BOOKMARKS_PATH=/path/to/Bookmarks.plist
+./doctor.sh
 ```
 
-## Notes
+## Safety Model
 
-- This cannot publish Chromium tabs into Safari's real iCloud Tabs UI. Apple does not expose an API for that.
-- Duplicate copies of the same URL are usually treated as one bookmark. Generated tab mirrors and tab-group folders intentionally allow duplicates.
-- If a browser is open while you edit native messaging setup, reload the extension afterward.
-- If Chromium refuses to load the unpacked extension because of `__pycache__`, remove that directory from the repo root.
+Safari Sync is intentionally local and transparent, but it does write private browser data stores.
+
+- Bookmark writes create timestamped backups in the runtime backup folder.
+- History writes are insert-only and dedupe near-identical visits.
+- Safari history rows use Safari's current history generation metadata instead of generation `0`.
+- Safari-to-Chromium history cannot preserve original visit times because Chromium's extension API does not expose that capability.
+- iCloud propagation is controlled by macOS/iCloud, not this project.
+
+Before changing sync behavior, test against copied Safari files by setting `SAFARI_BOOKMARKS_PATH` and `SAFARI_HISTORY_PATH`.
 
 ## Development
 
-Syntax checks:
+Run checks:
 
 ```sh
-node --check background.js
-python3 - <<'PY'
-import ast
-ast.parse(open("safari_sync.py").read())
-print("python syntax ok")
-PY
+./scripts/check.sh
+./doctor.sh
 ```
 
-Avoid `python -m py_compile` in the extension root; it creates `__pycache__`, and Chromium rejects unpacked extensions containing that directory.
+Avoid `python3 -m py_compile` in the extension root. It creates `__pycache__`, and Chromium may reject unpacked extensions containing that directory.
+
+Architecture notes live in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Privacy
 
-Do not commit runtime files. In particular:
+Do not commit runtime files. They can reveal bookmark URLs, open tabs, folder names, and browsing history.
+
+Ignored local files include:
 
 - `state.json`
 - `sync.log`
+- `backups/`
 - Safari plist backups
 
-They can reveal bookmark URLs, open tabs, folder names, and browsing history.
+## Project Intent
+
+The project should stay boring and inspectable:
+
+- Prefer deterministic local sync over cloud dependencies.
+- Prefer reversible bookmark writes with backups.
+- Treat Safari history writes as a narrow compatibility layer, not a general database migration tool.
+- Keep browser-specific behavior isolated so new Chromium-family browsers can be added without changing the sync core.

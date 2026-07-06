@@ -1,0 +1,29 @@
+{
+  "name": "chrome-to-safari-sync",
+  "version": "5.9.0",
+  "description": "Local Safari and Chromium bookmark, Reading List, tab, and history sync for macOS.",
+  "license": "MIT",
+  "homepage": "https://github.com/brycemcole/chrome-to-safari-sync",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/brycemcole/chrome-to-safari-sync.git"
+  },
+  "bugs": {
+    "url": "https://github.com/brycemcole/chrome-to-safari-sync/issues"
+  },
+  "keywords": [
+    "safari",
+    "chrome",
+    "chromium",
+    "bookmarks",
+    "history",
+    "reading-list",
+    "native-messaging",
+    "macos",
+    "helium-browser"
+  ],
+  "scripts": {
+    "check": "./scripts/check.sh",
+    "doctor": "./doctor.sh"
+  }
+}

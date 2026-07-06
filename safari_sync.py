@@ -9,19 +9,46 @@ import shutil
 import logging
 import threading
 import time
+import sqlite3
+import math
 from datetime import datetime, timezone
 from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-BASE_DIR = os.path.expanduser(os.environ.get("SAFARI_SYNC_STATE_DIR", SCRIPT_DIR))
+DEFAULT_BASE_DIR = os.path.expanduser("~/Library/Application Support/Safari Sync")
+BASE_DIR = os.path.expanduser(os.environ.get("SAFARI_SYNC_STATE_DIR", DEFAULT_BASE_DIR))
 BOOKMARKS_PATH = os.path.expanduser(
     os.environ.get("SAFARI_BOOKMARKS_PATH", "~/Library/Safari/Bookmarks.plist")
 )
+HISTORY_PATH = os.path.expanduser(
+    os.environ.get("SAFARI_HISTORY_PATH", "~/Library/Safari/History.db")
+)
 LOG_PATH = os.path.join(BASE_DIR, "sync.log")
 STATE_PATH = os.path.join(BASE_DIR, "state.json")
+BACKUP_DIR = os.path.join(BASE_DIR, "backups")
 POLL_INTERVAL = 1
+HISTORY_POLL_INTERVAL = 2
+HISTORY_PUSH_LIMIT = 200
+HISTORY_RECENT_KEYS_LIMIT = 5000
+HISTORY_DEDUPE_SECONDS = 0.0005
+MAC_EPOCH_OFFSET = 978307200
+
+def migrate_legacy_runtime_files():
+    if os.environ.get("SAFARI_SYNC_STATE_DIR"):
+        return
+    for name in ("state.json", "sync.log"):
+        src = os.path.join(SCRIPT_DIR, name)
+        dst = os.path.join(BASE_DIR, name)
+        if os.path.exists(src) and not os.path.exists(dst):
+            try:
+                shutil.move(src, dst)
+            except Exception:
+                shutil.copy2(src, dst)
+
 
 os.makedirs(BASE_DIR, exist_ok=True)
+os.makedirs(BACKUP_DIR, exist_ok=True)
+migrate_legacy_runtime_files()
 
 logging.basicConfig(
     filename=LOG_PATH,
@@ -72,7 +99,7 @@ def normalize_url(url):
 
 stdout_lock = threading.Lock()
 plist_lock = threading.Lock()
-state_lock = threading.Lock()
+state_lock = threading.RLock()
 
 
 def read_message():
@@ -103,17 +130,117 @@ _state = load_state()
 sent_to_chrome = set(_state.get("sent_to_chrome", []))
 folder_order_snapshot = _state.get("folder_order", {})  # path_key -> [norm_urls]
 migration_done = _state.get("dissolve_bookmarksmenu_v2", False)
+safari_history_cursor = _state.get("safari_history_cursor")
+history_recent_from_chrome = set(_state.get("history_recent_from_chrome", []))
+
+DEFAULT_CONFIG = {
+    "paused": False,
+    "direction": "bidirectional",
+    "syncHistory": True,
+    "syncReadingList": True,
+    "syncOpenTabs": True,
+    "syncTabGroups": True,
+    "openTabsFolderName": "Open Tabs",
+    "tabGroupsFolderName": "Tab Groups",
+}
+VALID_DIRECTIONS = {"bidirectional", "chrome_to_safari", "safari_to_chrome"}
+
+sync_config = dict(DEFAULT_CONFIG)
+config_lock = threading.Lock()
+watcher_started = False
+watcher_start_lock = threading.Lock()
+
+
+def clean_folder_name(value, fallback):
+    text = str(value or "").strip()
+    return text or fallback
+
+
+def apply_config(settings):
+    global sync_config
+    settings = settings or {}
+    next_config = dict(DEFAULT_CONFIG)
+    with config_lock:
+        next_config.update(sync_config)
+        next_config["paused"] = bool(settings.get("paused", next_config["paused"]))
+        direction = settings.get("direction", next_config["direction"])
+        next_config["direction"] = (
+            direction if direction in VALID_DIRECTIONS else DEFAULT_CONFIG["direction"]
+        )
+        for key in ("syncHistory", "syncReadingList", "syncOpenTabs", "syncTabGroups"):
+            if key in settings:
+                next_config[key] = bool(settings[key])
+        next_config["openTabsFolderName"] = clean_folder_name(
+            settings.get("openTabsFolderName", next_config["openTabsFolderName"]),
+            DEFAULT_CONFIG["openTabsFolderName"],
+        )
+        next_config["tabGroupsFolderName"] = clean_folder_name(
+            settings.get("tabGroupsFolderName", next_config["tabGroupsFolderName"]),
+            DEFAULT_CONFIG["tabGroupsFolderName"],
+        )
+        sync_config = next_config
+        return dict(sync_config)
+
+
+def current_config():
+    with config_lock:
+        return dict(sync_config)
+
+
+def can_push_safari_to_chrome():
+    cfg = current_config()
+    return not cfg["paused"] and cfg["direction"] != "chrome_to_safari"
+
+
+def can_apply_chrome_to_safari():
+    cfg = current_config()
+    return not cfg["paused"] and cfg["direction"] != "safari_to_chrome"
+
+
+def can_push_safari_history_to_chrome():
+    cfg = current_config()
+    return (
+        not cfg["paused"]
+        and cfg["syncHistory"]
+        and cfg["direction"] != "chrome_to_safari"
+    )
+
+
+def can_apply_chrome_history_to_safari():
+    cfg = current_config()
+    return (
+        not cfg["paused"]
+        and cfg["syncHistory"]
+        and cfg["direction"] != "safari_to_chrome"
+    )
+
+
+def generated_sync_folder_names():
+    cfg = current_config()
+    names = {
+        DEFAULT_CONFIG["openTabsFolderName"],
+        DEFAULT_CONFIG["tabGroupsFolderName"],
+        cfg["openTabsFolderName"],
+        cfg["tabGroupsFolderName"],
+    }
+    return {name for name in names if name}
 
 
 def persist_state():
-    tmp = STATE_PATH + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump({
+    tmp = f"{STATE_PATH}.{os.getpid()}.{threading.get_ident()}.tmp"
+    with state_lock:
+        data = {
             "sent_to_chrome": list(sent_to_chrome),
             "folder_order": folder_order_snapshot,
             "dissolve_bookmarksmenu_v2": migration_done,
-        }, f)
-    os.replace(tmp, STATE_PATH)
+            "safari_history_cursor": safari_history_cursor,
+            "history_recent_from_chrome": list(history_recent_from_chrome)[
+                -HISTORY_RECENT_KEYS_LIMIT:
+            ],
+        }
+        with open(tmp, "w") as f:
+            json.dump(data, f)
+        os.replace(tmp, STATE_PATH)
 
 
 def migrate_dissolve_bookmarksmenu():
@@ -166,7 +293,7 @@ def migrate_dissolve_bookmarksmenu():
 
     save_plist(data)
     logging.info(
-        "MIGRATE dissolved BookmarksMenu: %d folders + %d leaves → plist root",
+        "MIGRATE dissolved BookmarksMenu: %d folders + %d leaves -> plist root",
         moved_folders, moved_leaves,
     )
     migration_done = True
@@ -260,12 +387,181 @@ def load_plist():
 
 def save_plist(data):
     with plist_lock:
-        shutil.copy2(BOOKMARKS_PATH, BOOKMARKS_PATH + ".bak")
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        backup_name = f"Bookmarks-{stamp}-{os.getpid()}-{time.time_ns()}.plist"
+        shutil.copy2(BOOKMARKS_PATH, os.path.join(BACKUP_DIR, backup_name))
         tmp = BOOKMARKS_PATH + ".tmp"
         with open(tmp, "wb") as f:
             f.write(plistlib.dumps(data))
         subprocess.run(["plutil", "-convert", "binary1", tmp], check=True)
         os.replace(tmp, BOOKMARKS_PATH)
+
+
+def is_history_url(url):
+    try:
+        parsed = urlparse(url or "")
+        return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+    except Exception:
+        return False
+
+
+def chrome_ms_to_safari_time(value):
+    try:
+        millis = float(value)
+    except Exception:
+        millis = time.time() * 1000
+    if not math.isfinite(millis) or millis <= 0:
+        millis = time.time() * 1000
+    return (millis / 1000.0) - MAC_EPOCH_OFFSET
+
+
+def safari_time_to_chrome_ms(value):
+    return int((float(value) + MAC_EPOCH_OFFSET) * 1000)
+
+
+def history_key(url, visit_time):
+    return f"{normalize_url(url)}|{round(float(visit_time), 3)}"
+
+
+def remember_history_from_chrome(url, visit_time):
+    key = history_key(url, visit_time)
+    with state_lock:
+        history_recent_from_chrome.add(key)
+        if len(history_recent_from_chrome) > HISTORY_RECENT_KEYS_LIMIT:
+            keep = list(history_recent_from_chrome)[-HISTORY_RECENT_KEYS_LIMIT:]
+            history_recent_from_chrome.clear()
+            history_recent_from_chrome.update(keep)
+    return key
+
+
+def open_history_db():
+    conn = sqlite3.connect(HISTORY_PATH, timeout=10)
+    conn.execute("PRAGMA busy_timeout=5000")
+    conn.execute("PRAGMA foreign_keys=ON")
+    return conn
+
+
+def next_history_generation(conn):
+    row = conn.execute(
+        "SELECT value FROM metadata WHERE key = 'current_generation'"
+    ).fetchone()
+    try:
+        current = int(row[0]) if row and row[0] is not None else 0
+    except Exception:
+        current = 0
+    generation = current + 1
+    conn.execute(
+        """
+        INSERT INTO metadata (key, value)
+        VALUES ('current_generation', ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        """,
+        (generation,),
+    )
+    return generation
+
+
+def add_history_visit(url, title=None, visit_time_ms=None):
+    if not is_history_url(url):
+        return {"status": "skipped_url"}
+    visit_time = chrome_ms_to_safari_time(visit_time_ms)
+    title = title or url
+
+    with open_history_db() as conn:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO history_items (
+                url,
+                domain_expansion,
+                visit_count,
+                daily_visit_counts,
+                weekly_visit_counts,
+                autocomplete_triggers,
+                should_recompute_derived_visit_counts,
+                visit_count_score,
+                status_code
+            ) VALUES (?, NULL, 0, ?, NULL, NULL, 1, 0, 0)
+            """,
+            (url, b""),
+        )
+        row = conn.execute(
+            "SELECT id FROM history_items WHERE url = ?",
+            (url,),
+        ).fetchone()
+        if row is None:
+            return {"status": "error", "message": "history item insert failed"}
+
+        item_id = row[0]
+        existing = conn.execute(
+            """
+            SELECT id FROM history_visits
+            WHERE history_item = ? AND ABS(visit_time - ?) < ?
+            LIMIT 1
+            """,
+            (item_id, visit_time, HISTORY_DEDUPE_SECONDS),
+        ).fetchone()
+        if existing is not None:
+            remember_history_from_chrome(url, visit_time)
+            return {"status": "exists"}
+
+        generation = next_history_generation(conn)
+        conn.execute(
+            """
+            INSERT INTO history_visits (
+                history_item,
+                visit_time,
+                title,
+                load_successful,
+                http_non_get,
+                synthesized,
+                origin,
+                generation,
+                attributes,
+                score
+            ) VALUES (?, ?, ?, 1, 0, 0, 1, ?, 0, 0)
+            """,
+            (item_id, visit_time, title, generation),
+        )
+        conn.execute(
+            """
+            UPDATE history_items
+            SET visit_count = visit_count + 1,
+                should_recompute_derived_visit_counts = 1
+            WHERE id = ?
+            """,
+            (item_id,),
+        )
+
+    remember_history_from_chrome(url, visit_time)
+    logging.info("H+ %s", url)
+    return {"status": "added", "visit_time": visit_time}
+
+
+def current_safari_history_max_time():
+    if not os.path.exists(HISTORY_PATH):
+        return None
+    with open_history_db() as conn:
+        row = conn.execute("SELECT MAX(visit_time) FROM history_visits").fetchone()
+    return row[0] if row and row[0] is not None else None
+
+
+def safari_history_since(since_time):
+    if not os.path.exists(HISTORY_PATH):
+        return []
+    with open_history_db() as conn:
+        return conn.execute(
+            """
+            SELECT hv.id, hi.url, hv.title, hv.visit_time
+            FROM history_visits hv
+            JOIN history_items hi ON hi.id = hv.history_item
+            WHERE hv.visit_time > ?
+              AND hv.load_successful = 1
+              AND hi.url LIKE 'http%'
+            ORDER BY hv.visit_time ASC, hv.id ASC
+            LIMIT ?
+            """,
+            (float(since_time), HISTORY_PUSH_LIMIT),
+        ).fetchall()
 
 
 def new_uuid():
@@ -350,10 +646,10 @@ def descend_folder(root, parts, create=False):
 
 
 def resolve_target_folder(data, path, create=True):
-    """Map canonical path → plist folder container (the dict whose Children list holds the item).
-    [BAR, ...]              → BookmarksBar / ...
-    [OTHER]                 → plist root (loose leaves at top level)
-    [OTHER, TopName, ...]   → top-level plist folder TopName / ...
+    """Map canonical path -> plist folder container (the dict whose Children list holds the item).
+    [BAR, ...]              -> BookmarksBar / ...
+    [OTHER]                 -> plist root (loose leaves at top level)
+    [OTHER, TopName, ...]   -> top-level plist folder TopName / ...
     """
     path = normalize_canonical_path(path)
     if not path:
@@ -363,7 +659,7 @@ def resolve_target_folder(data, path, create=True):
         sub_parts = path[1:]
     elif path[0] == CANON_OTHER:
         if len(path) == 1:
-            return data  # plist root itself — its Children list holds loose leaves
+            return data
         top_name = path[1]
         root = find_or_create_toplevel(data, top_name) if create else find_toplevel(data, top_name)
         sub_parts = path[2:]
@@ -374,7 +670,7 @@ def resolve_target_folder(data, path, create=True):
     return descend_folder(root, sub_parts, create=create)
 
 
-# Back-compat alias — older callers used this name
+# Back-compat alias for older callers.
 def resolve_folder(data, path):
     return resolve_target_folder(data, path, create=False)
 
@@ -428,6 +724,8 @@ def pop_url_leaf_direct(folder, url):
 def snapshot_safari():
     """Returns (by_url, by_folder)."""
     data = load_plist()
+    cfg = current_config()
+    generated_names = generated_sync_folder_names()
     by_url = {}
     by_folder = {}
 
@@ -435,7 +733,7 @@ def snapshot_safari():
         return (
             len(path) >= 2
             and path[0] == CANON_OTHER
-            and path[1] in {"Open Tabs", "Tab Groups"}
+            and path[1] in generated_names
         )
 
     def walk_folder(node, path, is_rl):
@@ -481,17 +779,18 @@ def snapshot_safari():
         if title == SAFARI_BAR:
             walk_folder(child, [CANON_BAR], False)
         elif title == SAFARI_MENU:
-            # Legacy — pre-migration. Walk as if its children were already at root.
+            # Legacy pre-migration. Walk as if its children were already at root.
             walk_folder(child, [CANON_OTHER], False)
         elif title == SAFARI_RL:
-            walk_folder(child, [], True)
+            if cfg["syncReadingList"]:
+                walk_folder(child, [], True)
         elif title in SYSTEM_ROOTS:
             continue
         elif child.get("WebBookmarkType") == "WebBookmarkTypeList":
-            # User top-level folder → canonical [OTHER, title, ...]
+            # User top-level folder maps to canonical [OTHER, title, ...]
             walk_folder(child, [CANON_OTHER, title], False)
         elif child.get("WebBookmarkType") == "WebBookmarkTypeLeaf":
-            # Loose leaf at plist root → path=[OTHER]
+            # Loose leaf at plist root maps to path=[OTHER]
             url = child.get("URLString")
             if not url:
                 continue
@@ -629,7 +928,7 @@ def reorder_folder(path, ordered_urls):
     children = list(folder.get("Children", []))
 
     if path == [CANON_OTHER]:
-        # Plist root — reorder only loose leaves in place, keep folders/system roots where they are
+        # Plist root: reorder only loose leaves in place, keep folders/system roots where they are.
         leaf_positions = [i for i, c in enumerate(children)
                           if isinstance(c, dict) and c.get("WebBookmarkType") == "WebBookmarkTypeLeaf"]
         leaves_by_norm = {}
@@ -724,29 +1023,35 @@ def watcher():
         if pk not in known_by_folder:
             folder_order_snapshot.pop(pk, None)
 
+    push_allowed = can_push_safari_to_chrome()
     with state_lock:
-        to_push = {u: i for u, i in known_by_url.items() if u not in sent_to_chrome}
+        to_push = (
+            {u: i for u, i in known_by_url.items() if u not in sent_to_chrome}
+            if push_allowed else {}
+        )
     logging.info("Initial: %d/%d new Safari items", len(to_push), len(known_by_url))
     # Send adds in path+index order so Chrome applies in the right sequence
-    for url, info in sorted(
-        to_push.items(),
-        key=lambda kv: (kv[1]["path"], kv[1]["index"]),
-    ):
-        send_message({
-            "action": "add",
-            "kind": info["kind"],
-            "url": info["url"],
-            "title": info["title"],
-            "path": info["path"],
-            "index": info["index"],
-        })
-        record_sent(url)
+    if push_allowed:
+        for url, info in sorted(
+            to_push.items(),
+            key=lambda kv: (kv[1]["path"], kv[1]["index"]),
+        ):
+            send_message({
+                "action": "add",
+                "kind": info["kind"],
+                "url": info["url"],
+                "title": info["title"],
+                "path": info["path"],
+                "index": info["index"],
+            })
+            record_sent(url)
 
     # Push initial folder order
     for pk, ordered in known_by_folder.items():
         prev = folder_order_snapshot.get(pk)
         if prev != ordered:
-            push_folder_order(pk, ordered)
+            if push_allowed:
+                push_folder_order(pk, ordered)
             folder_order_snapshot[pk] = ordered
     persist_state()
 
@@ -767,44 +1072,61 @@ def watcher():
             cur_url, cur_folder = snapshot_safari()
             added = {u: i for u, i in cur_url.items() if u not in known_by_url}
             removed = {u: i for u, i in known_by_url.items() if u not in cur_url}
+            push_allowed = can_push_safari_to_chrome()
+            pushed_adds = 0
+            pushed_removes = 0
+            pushed_reorders = 0
 
-            for url, info in sorted(
-                added.items(),
-                key=lambda kv: (kv[1]["path"], kv[1]["index"]),
-            ):
-                send_message({
-                    "action": "add",
-                    "kind": info["kind"],
-                    "url": info["url"],
-                    "title": info["title"],
-                    "path": info["path"],
-                    "index": info["index"],
-                })
-                record_sent(url)
+            if push_allowed:
+                for url, info in sorted(
+                    added.items(),
+                    key=lambda kv: (kv[1]["path"], kv[1]["index"]),
+                ):
+                    send_message({
+                        "action": "add",
+                        "kind": info["kind"],
+                        "url": info["url"],
+                        "title": info["title"],
+                        "path": info["path"],
+                        "index": info["index"],
+                    })
+                    record_sent(url)
+                    pushed_adds += 1
 
-            for url, info in removed.items():
-                send_message({
-                    "action": "remove",
-                    "kind": info["kind"],
-                    "url": info["url"],
-                })
-                with state_lock:
-                    sent_to_chrome.discard(url)
+                for url, info in removed.items():
+                    send_message({
+                        "action": "remove",
+                        "kind": info["kind"],
+                        "url": info["url"],
+                    })
+                    with state_lock:
+                        sent_to_chrome.discard(url)
+                    pushed_removes += 1
 
             # Order changes per folder
             for pk, ordered in cur_folder.items():
                 prev = folder_order_snapshot.get(pk)
                 if prev != ordered:
-                    push_folder_order(pk, ordered)
+                    if push_allowed:
+                        push_folder_order(pk, ordered)
+                        pushed_reorders += 1
                     folder_order_snapshot[pk] = ordered
 
-            # Folders gone entirely — drop from snapshot
+            # Folders gone entirely: drop from snapshot.
             for pk in list(folder_order_snapshot):
                 if pk not in cur_folder:
                     folder_order_snapshot.pop(pk, None)
 
             known_by_url = cur_url
             known_by_folder = cur_folder
+
+            if pushed_adds or pushed_removes or pushed_reorders:
+                logging.info(
+                    "S> +%d -%d ~%d",
+                    pushed_adds,
+                    pushed_removes,
+                    pushed_reorders,
+                )
 
             if added or removed:
                 persist_state()
@@ -815,7 +1137,63 @@ def watcher():
             logging.error("watcher: %s", e)
 
 
-threading.Thread(target=watcher, daemon=True).start()
+def history_watcher():
+    global safari_history_cursor
+    try:
+        if safari_history_cursor is None:
+            safari_history_cursor = current_safari_history_max_time()
+            persist_state()
+    except Exception as e:
+        logging.error("initial history cursor failed: %s", e)
+
+    while True:
+        time.sleep(HISTORY_POLL_INTERVAL)
+        try:
+            if not can_push_safari_history_to_chrome():
+                continue
+
+            cursor = safari_history_cursor
+            if cursor is None:
+                cursor = current_safari_history_max_time()
+                safari_history_cursor = cursor
+                persist_state()
+                continue
+
+            rows = safari_history_since(float(cursor))
+            max_seen = float(cursor)
+            pushed = 0
+
+            for _visit_id, url, title, visit_time in rows:
+                max_seen = max(max_seen, float(visit_time))
+                key = history_key(url, visit_time)
+                with state_lock:
+                    if key in history_recent_from_chrome:
+                        continue
+                send_message({
+                    "action": "history_add",
+                    "url": url,
+                    "title": title or url,
+                    "visitTime": safari_time_to_chrome_ms(visit_time),
+                })
+                pushed += 1
+
+            if max_seen > float(cursor):
+                safari_history_cursor = max_seen
+                persist_state()
+            if pushed:
+                logging.info("H> %d Safari history visits", pushed)
+        except Exception as e:
+            logging.error("history watcher: %s", e)
+
+
+def ensure_watcher_started():
+    global watcher_started
+    with watcher_start_lock:
+        if watcher_started:
+            return
+        threading.Thread(target=watcher, daemon=True).start()
+        threading.Thread(target=history_watcher, daemon=True).start()
+        watcher_started = True
 
 
 # --- Main loop: process messages from Chrome ---
@@ -826,39 +1204,65 @@ while True:
         break
     try:
         action = msg.get("action")
-        if action == "add":
-            result = add_at_path(
-                msg["url"],
-                msg.get("title") or msg["url"],
-                msg.get("path") or [CANON_OTHER],
-                msg.get("kind") == "reading_list",
-                msg.get("index"),
-                msg.get("allowDuplicate", False),
-            )
-            if result.get("status") in ("added", "moved"):
-                norm = normalize_url(msg["url"])
-                known_by_url[norm] = {
-                    "url": msg["url"],
-                    "title": msg.get("title") or msg["url"],
-                    "path": normalize_canonical_path(msg.get("path") or [CANON_OTHER]),
-                    "kind": msg.get("kind", "bookmark"),
-                    "index": msg.get("index", -1),
-                }
-                record_sent(norm)
-        elif action == "remove":
-            result = remove_url(msg["url"], msg.get("path"))
-            if result.get("status") == "removed":
-                norm = normalize_url(msg["url"])
-                known_by_url.pop(norm, None)
-                with state_lock:
-                    sent_to_chrome.discard(norm)
-        elif action == "reorder":
-            result = reorder_folder(msg.get("path") or [], msg.get("urls") or [])
-            # refresh our cached order for that folder so watcher doesn't echo
-            if result.get("status") in ("reordered", "unchanged"):
-                folder_order_snapshot[path_key(normalize_canonical_path(msg.get("path") or []))] = msg.get("urls") or []
+        if action == "config":
+            result = {
+                "status": "config_applied",
+                "settings": apply_config(msg.get("settings") or {}),
+            }
+            ensure_watcher_started()
+        elif action == "ping":
+            result = {
+                "status": "ok",
+                "config": current_config(),
+                "watcher_started": watcher_started,
+            }
         else:
-            result = {"status": "unknown_action"}
+            ensure_watcher_started()
+            if action == "history_add" and not can_apply_chrome_history_to_safari():
+                result = {"status": "skipped_direction"}
+            elif action in {"add", "remove", "reorder"} and not can_apply_chrome_to_safari():
+                result = {"status": "skipped_direction"}
+            elif msg.get("kind") == "reading_list" and not current_config()["syncReadingList"]:
+                result = {"status": "skipped_disabled"}
+            elif action == "history_add":
+                result = add_history_visit(
+                    msg["url"],
+                    msg.get("title") or msg["url"],
+                    msg.get("visitTime"),
+                )
+            elif action == "add":
+                result = add_at_path(
+                    msg["url"],
+                    msg.get("title") or msg["url"],
+                    msg.get("path") or [CANON_OTHER],
+                    msg.get("kind") == "reading_list",
+                    msg.get("index"),
+                    msg.get("allowDuplicate", False),
+                )
+                if result.get("status") in ("added", "moved"):
+                    norm = normalize_url(msg["url"])
+                    known_by_url[norm] = {
+                        "url": msg["url"],
+                        "title": msg.get("title") or msg["url"],
+                        "path": normalize_canonical_path(msg.get("path") or [CANON_OTHER]),
+                        "kind": msg.get("kind", "bookmark"),
+                        "index": msg.get("index", -1),
+                    }
+                    record_sent(norm)
+            elif action == "remove":
+                result = remove_url(msg["url"], msg.get("path"))
+                if result.get("status") == "removed":
+                    norm = normalize_url(msg["url"])
+                    known_by_url.pop(norm, None)
+                    with state_lock:
+                        sent_to_chrome.discard(norm)
+            elif action == "reorder":
+                result = reorder_folder(msg.get("path") or [], msg.get("urls") or [])
+                # refresh our cached order for that folder so watcher doesn't echo
+                if result.get("status") in ("reordered", "unchanged"):
+                    folder_order_snapshot[path_key(normalize_canonical_path(msg.get("path") or []))] = msg.get("urls") or []
+            else:
+                result = {"status": "unknown_action"}
     except Exception as e:
         logging.exception("error on %s", msg)
         result = {"status": "error", "message": str(e)}
