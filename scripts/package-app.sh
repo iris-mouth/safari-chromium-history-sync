@@ -12,7 +12,7 @@ if [[ -z "${SDKROOT:-}" \
   && -d /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk ]]; then
   export SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk
 fi
-swift build --package-path "$ROOT" -c release
+swift build --disable-sandbox --package-path "$ROOT" -c release
 rm -rf "$APP" "$AGENT_APP" "$LEGACY_APP"
 mkdir -p "$APP/Contents/MacOS" "$AGENT_APP/Contents/MacOS"
 cp "$ROOT/.build/release/SafariSyncMenu" "$APP/Contents/MacOS/"

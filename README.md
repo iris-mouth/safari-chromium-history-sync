@@ -16,8 +16,8 @@ Bridge and Menu requests use role-bound HMAC authentication over a mode-`0600` U
 
 The writer fails closed outside the qualified tuple:
 
-- macOS 26.6.2 (25G83)
-- Safari 21624.5.1.11.3
+- macOS 27.0 (26A428)
+- Safari 22625.1.29.11.27
 - the qualified `com.apple.Safari.History` binary hash
 - the exact tested `history_items`, `history_visits`, and `metadata` schema
 

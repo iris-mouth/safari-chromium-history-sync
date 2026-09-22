@@ -46,6 +46,14 @@ public final class SafariHistoryStore: @unchecked Sendable {
         self.ledger = DeliveryLedger(url: resolvedLedger)
     }
 
+    public func validateAccessAndSchema() throws {
+        try lock.withLock {
+            let db = try Connection(path: databaseURL.path)
+            defer { db.close() }
+            try validateSchema(db)
+        }
+    }
+
     public func arrivalBaseline(authenticationKey: Data) throws -> SafariArrivalCursor {
         try lock.withLock {
             let db = try Connection(path: databaseURL.path)

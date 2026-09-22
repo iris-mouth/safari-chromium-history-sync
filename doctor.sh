@@ -17,14 +17,14 @@ fail() { FAILURES=$((FAILURES + 1)); printf 'FAIL %s\n' "$1"; }
 
 printf '%s\n\n' 'Safari Chromium History Sync Doctor'
 
-if [[ "$(sw_vers -productVersion)" == "26.6.2" && "$(sw_vers -buildVersion)" == "25G83" ]]; then
-  ok 'qualified macOS 26.6.2 (25G83)'
+if [[ "$(sw_vers -productVersion)" == "27.0" && "$(sw_vers -buildVersion)" == "26A428" ]]; then
+  ok 'qualified macOS 27.0 (26A428)'
 else
   fail 'macOS build is not in the qualification matrix'
 fi
 
 SAFARI_BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' /Applications/Safari.app/Contents/Info.plist 2>/dev/null)"
-if [[ "$SAFARI_BUILD" == "21624.5.1.11.3" ]]; then
+if [[ "$SAFARI_BUILD" == "22625.1.29.11.27" ]]; then
   ok "qualified Safari build $SAFARI_BUILD"
 else
   fail "Safari build is not qualified: $SAFARI_BUILD"

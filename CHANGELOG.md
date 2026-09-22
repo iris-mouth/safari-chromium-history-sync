@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Qualified macOS 27.0 (26A428), Safari 22625.1.29.11.27, and its exact
+  `com.apple.Safari.History` binary fingerprint.
+- Disabled SwiftPM's build sandbox for this dependency-free local package because
+  macOS 27 rejects the nested sandbox used by the check and packaging scripts.
+- Made the Agent validate Full Disk Access and the exact Safari history schema at
+  startup instead of appearing healthy until its first sync request.
+
 ## 6.0
 
 - Renamed the product and extension to Safari Chromium History Sync while retaining compatible internal identifiers and state paths.

@@ -28,6 +28,7 @@ do {
         databaseURL: historyURL,
         ledgerURL: runtimeDirectory.appendingPathComponent("delivery-ledger.sqlite")
     )
+    try history.validateAccessAndSchema()
     let service = AgentService(
         history: history,
         stateURL: runtimeDirectory.appendingPathComponent("state.sealed"),

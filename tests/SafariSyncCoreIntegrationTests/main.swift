@@ -17,6 +17,7 @@ func expect<T: Equatable>(_ actual: T, _ expected: T, _ message: String) throws 
 
 struct SafariSyncCoreIntegrationTests {
     static func main() throws {
+        try validatesHistoryAccessAndSchema()
         try insertsOutboundVisitWithoutAcknowledgingICloud()
         try insertsDistinctOutboundVisits()
         try sourceEventIsIdempotent()
@@ -24,6 +25,12 @@ struct SafariSyncCoreIntegrationTests {
         try keyLossReportsUnrecoverableWork()
         try ipcSecretRequiresOwnerOnlyRegularFile()
         print("SafariSyncCoreIntegrationTests passed")
+    }
+
+    static func validatesHistoryAccessAndSchema() throws {
+        let fixture = try HistoryFixture()
+        let store = SafariHistoryStore(databaseURL: fixture.url, ledgerURL: fixture.ledgerURL)
+        try store.validateAccessAndSchema()
     }
 
     static func insertsOutboundVisitWithoutAcknowledgingICloud() throws {

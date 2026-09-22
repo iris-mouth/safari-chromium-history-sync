@@ -11,10 +11,10 @@ public struct CompatibilityTuple: Codable, Equatable, Sendable {
 
 public enum CompatibilityGate {
     public static let qualified = CompatibilityTuple(
-        macOSVersion: "26.6.2",
-        macOSBuild: "25G83",
-        safariBuild: "21624.5.1.11.3",
-        historyServiceSHA256: "d95ed7bb6e30f3bb024abc937155d5009cf1d14e7ba70c4222adc71a786be5f6"
+        macOSVersion: "27.0.0",
+        macOSBuild: "26A428",
+        safariBuild: "22625.1.29.11.27",
+        historyServiceSHA256: "ab218c41abc06292969090580be6a3efa7e212595590df6e1e1328bfdec30b9a"
     )
 
     public static func verify() throws -> CompatibilityTuple {
