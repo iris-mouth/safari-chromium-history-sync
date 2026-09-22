@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-APP_PATH="$ROOT/dist/Safari History Sync.app"
+APP_PATH="$ROOT/dist/Safari Chromium History Sync.app"
 AGENT_APP_PATH="$ROOT/dist/SafariSyncAgent.app"
 CHROME_ID=""
 EDGE_ID=""
@@ -58,4 +58,4 @@ if [[ -z "$CHROME_ID" && -z "$EDGE_ID" ]]; then
   exit 64
 fi
 
-printf '%s\n' 'Open the Menu app, choose Enable Agent, then grant Full Disk Access only to the sibling SafariSyncAgent.app.'
+printf '%s\n' 'Open Safari Chromium History Sync, choose Enable Agent, then grant Full Disk Access only to the sibling SafariSyncAgent.app.'

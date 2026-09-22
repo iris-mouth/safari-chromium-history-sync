@@ -2,20 +2,20 @@
 set -u
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-APP="$ROOT/dist/Safari History Sync.app"
+APP="$ROOT/dist/Safari Chromium History Sync.app"
 AGENT_APP="$ROOT/dist/SafariSyncAgent.app"
 HOST="com.local.safari_history_sync.json"
 FAILURES=0
 
-if [[ ! -d "$APP" && -d "/Applications/Safari History Sync.app" ]]; then
-  APP="/Applications/Safari History Sync.app"
+if [[ ! -d "$APP" && -d "/Applications/Safari Chromium History Sync.app" ]]; then
+  APP="/Applications/Safari Chromium History Sync.app"
   AGENT_APP="/Applications/SafariSyncAgent.app"
 fi
 
 ok() { printf 'OK   %s\n' "$1"; }
 fail() { FAILURES=$((FAILURES + 1)); printf 'FAIL %s\n' "$1"; }
 
-printf '%s\n\n' 'Safari History Sync Doctor'
+printf '%s\n\n' 'Safari Chromium History Sync Doctor'
 
 if [[ "$(sw_vers -productVersion)" == "26.6.2" && "$(sw_vers -buildVersion)" == "25G83" ]]; then
   ok 'qualified macOS 26.6.2 (25G83)'

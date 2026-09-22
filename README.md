@@ -1,6 +1,6 @@
-# Safari History Sync
+# Safari Chromium History Sync
 
-Safari History Sync keeps **new** history visits synchronized in both directions between Safari and exactly one active Google Chrome Stable or Microsoft Edge Stable profile on macOS. Safari remains the iCloud path to iPhone and iPad.
+Safari Chromium History Sync keeps **new** history visits synchronized in both directions between Safari and exactly one active Google Chrome Stable or Microsoft Edge Stable profile on macOS. Safari remains the iCloud path to iPhone and iPad.
 
 Version 6 is a history-only rewrite. It intentionally does not sync bookmarks, Reading List, tabs, tab groups, deletions, or old history. It does not use Chrome as an Edge hub. A Safari visit delivered to Chrome/Edge is a new delivery-time visit because Chromium cannot preserve an external visit timestamp.
 
@@ -42,14 +42,14 @@ Without `CODESIGN_IDENTITY`, packaging uses an ad-hoc signature for local develo
 
 ## Install
 
-1. Build the apps and move both `dist/Safari History Sync.app` and `dist/SafariSyncAgent.app` to `/Applications`.
+1. Build the apps and move both `dist/Safari Chromium History Sync.app` and `dist/SafariSyncAgent.app` to `/Applications`.
 2. Load this repository as an unpacked extension in Chrome Stable and/or Edge Stable.
 3. Install only the required Native Messaging manifests:
 
    ```sh
    ./setup.sh --chrome-id aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
               --edge-id bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
-              --app '/Applications/Safari History Sync.app'
+              --app '/Applications/Safari Chromium History Sync.app'
    ```
 
 4. Open the Menu app and choose **Enable Agent**. This registers the Menu app as a login item and launches the sibling Agent. At login, the Menu app launches the Agent automatically.
@@ -68,6 +68,10 @@ Do not install version 6 beside the legacy Python writer. Remove the old `com.lo
 - A delivery gets at most two immediate attempts. Unconfirmed outcomes enter the encrypted profile-scoped recovery ledger at 5m/15m/30m/2h/6h intervals, capped at 20 retries and retained when exhausted.
 - Database replacement or an arrival-anchor mismatch stops scanning. Resume from the current point only after explicit operator action.
 
-Run `./doctor.sh` after installation. Runtime files live in `~/Library/Application Support/Safari History Sync` and can contain private browsing URLs.
+Run `./doctor.sh` after installation. Runtime files live in `~/Library/Application Support/Safari History Sync` and can contain private browsing URLs. This legacy internal directory name is intentionally retained so upgrades keep the existing encrypted state and delivery ledger.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for protocol and failure semantics.
+
+## Project lineage
+
+This project is derived from [brycemcole/chrome-to-safari-sync](https://github.com/brycemcole/chrome-to-safari-sync) and retains its MIT license and Git history. Version 6 is a purpose-built history synchronization redesign.

@@ -1,11 +1,11 @@
 {
   "manifest_version": 3,
-  "name": "Safari Sync",
-  "short_name": "Safari Sync",
+  "name": "Safari Chromium History Sync",
+  "short_name": "History Sync",
   "version": "6.0",
   "description": "Bidirectional local history sync between Safari and one active Chrome or Edge profile on macOS.",
-  "homepage_url": "https://github.com/brycemcole/chrome-to-safari-sync",
-  "author": "Bryce Cole",
+  "homepage_url": "https://github.com/iris-mouth/safari-chromium-history-sync",
+  "author": "Bryce Cole and contributors",
   "permissions": [
     "history",
     "nativeMessaging",
@@ -17,7 +17,7 @@
     "type": "module"
   },
   "action": {
-    "default_title": "Safari Sync",
+    "default_title": "Safari Chromium History Sync",
     "default_popup": "popup.html"
   }
 }

@@ -19,7 +19,7 @@ final class MenuDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        item.button?.title = "Safari Sync"
+        item.button?.title = "Safari Chromium History Sync"
         let menu = NSMenu()
         menu.addItem(healthItem)
         menu.addItem(.separator())
@@ -59,7 +59,7 @@ final class MenuDelegate: NSObject, NSApplicationDelegate {
                 let error = NSError(
                     domain: "SafariHistorySync",
                     code: 1,
-                    userInfo: [NSLocalizedDescriptionKey: "SafariSyncAgent.app must be installed beside Safari History Sync.app."]
+                    userInfo: [NSLocalizedDescriptionKey: "SafariSyncAgent.app must be installed beside Safari Chromium History Sync.app."]
                 )
                 NSAlert(error: error).runModal()
             }

@@ -2,6 +2,7 @@
 
 ## 6.0
 
+- Renamed the product and extension to Safari Chromium History Sync while retaining compatible internal identifiers and state paths.
 - Replaced the Python multi-feature host with a Swift history-only installation containing a no-FDA Menu app, independent FDA-only Agent app, and no-FDA Native Messaging Bridge.
 - Added bidirectional new-visit sync for exactly one active Chrome Stable or Edge Stable profile.
 - Added immutable extension generations, monotonic streams, evidence-based Chromium delivery, encrypted recovery state, and a durable profile-switch FSM.

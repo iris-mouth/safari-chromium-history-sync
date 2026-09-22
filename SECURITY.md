@@ -1,6 +1,6 @@
 # Security
 
-Safari Sync handles private browsing data locally. Reports involving data exposure, unsafe writes, or unexpected deletion should be treated as security-sensitive even though the project does not run a server.
+Safari Chromium History Sync handles private browsing data locally. Reports involving data exposure, unsafe writes, or unexpected deletion should be treated as security-sensitive even though the project does not run a server.
 
 ## Sensitive Data
 

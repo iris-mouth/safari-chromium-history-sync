@@ -2,8 +2,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP="$ROOT/dist/Safari History Sync.app"
+APP="$ROOT/dist/Safari Chromium History Sync.app"
 AGENT_APP="$ROOT/dist/SafariSyncAgent.app"
+LEGACY_APP="$ROOT/dist/Safari History Sync.app"
 IDENTITY="${CODESIGN_IDENTITY:--}"
 
 if [[ -z "${SDKROOT:-}" \
@@ -12,7 +13,7 @@ if [[ -z "${SDKROOT:-}" \
   export SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk
 fi
 swift build --package-path "$ROOT" -c release
-rm -rf "$APP" "$AGENT_APP"
+rm -rf "$APP" "$AGENT_APP" "$LEGACY_APP"
 mkdir -p "$APP/Contents/MacOS" "$AGENT_APP/Contents/MacOS"
 cp "$ROOT/.build/release/SafariSyncMenu" "$APP/Contents/MacOS/"
 cp "$ROOT/.build/release/SafariSyncBridge" "$APP/Contents/MacOS/"
@@ -29,8 +30,8 @@ codesign --verify --deep --strict --verbose=2 "$AGENT_APP"
 codesign --verify --deep --strict --verbose=2 "$APP"
 
 if [[ -n "${NOTARY_PROFILE:-}" ]]; then
-  ditto -c -k --keepParent "$APP" "$ROOT/dist/Safari-History-Sync.zip"
-  xcrun notarytool submit "$ROOT/dist/Safari-History-Sync.zip" \
+  ditto -c -k --keepParent "$APP" "$ROOT/dist/Safari-Chromium-History-Sync.zip"
+  xcrun notarytool submit "$ROOT/dist/Safari-Chromium-History-Sync.zip" \
     --keychain-profile "$NOTARY_PROFILE" --wait
   xcrun stapler staple "$APP"
   ditto -c -k --keepParent "$AGENT_APP" "$ROOT/dist/SafariSyncAgent.zip"

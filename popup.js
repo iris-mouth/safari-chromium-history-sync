@@ -16,7 +16,7 @@ function request(message) {
 function render(status) {
   elements.state.textContent = status.switchState === "STABLE" ? "Ready" : "Switching";
   elements.state.className = `pill ${status.switchState === "STABLE" ? "ok" : "syncing"}`;
-  elements.detail.textContent = "Safari ↔ Chrome / Edge history only";
+  elements.detail.textContent = "Safari ↔ Chrome / Edge";
   elements.activeProfile.textContent = status.activeProfileId ?? "None";
   elements.switchState.textContent = status.switchState;
   elements.toSafari.textContent = String(status.pendingBrowserToSafari);

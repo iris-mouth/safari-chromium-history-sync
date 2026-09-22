@@ -1,4 +1,4 @@
-# Runtime state and logs contain private bookmark/tab URLs.
+# Runtime state and logs contain private browsing-history URLs.
 state.json
 state.json.tmp
 sync.log

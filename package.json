@@ -1,15 +1,15 @@
 {
-  "name": "chrome-to-safari-sync",
+  "name": "safari-chromium-history-sync",
   "version": "6.0.0",
   "description": "Local bidirectional Safari and Chrome/Edge history sync for macOS.",
   "license": "MIT",
-  "homepage": "https://github.com/brycemcole/chrome-to-safari-sync",
+  "homepage": "https://github.com/iris-mouth/safari-chromium-history-sync",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/brycemcole/chrome-to-safari-sync.git"
+    "url": "git+https://github.com/iris-mouth/safari-chromium-history-sync.git"
   },
   "bugs": {
-    "url": "https://github.com/brycemcole/chrome-to-safari-sync/issues"
+    "url": "https://github.com/iris-mouth/safari-chromium-history-sync/issues"
   },
   "keywords": [
     "safari",
