@@ -4,6 +4,7 @@ import ServiceManagement
 
 @MainActor
 final class MenuDelegate: NSObject, NSApplicationDelegate {
+    private let agentBundleIdentifier = "com.local.safari-history-sync.agent"
     private var statusItem: NSStatusItem?
     private var healthItem = NSMenuItem(title: "Agent not connected", action: nil, keyEquivalent: "")
 
@@ -50,6 +51,11 @@ final class MenuDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func launchAgent(showErrors: Bool) {
+        if !NSRunningApplication.runningApplications(withBundleIdentifier: agentBundleIdentifier).isEmpty {
+            refreshStatus()
+            return
+        }
+
         let agentURL = Bundle.main.bundleURL
             .deletingLastPathComponent()
             .appendingPathComponent("SafariSyncAgent.app", isDirectory: true)

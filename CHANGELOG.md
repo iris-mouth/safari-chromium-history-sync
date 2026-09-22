@@ -7,6 +7,7 @@
 - Added bidirectional new-visit sync for exactly one active Chrome Stable or Edge Stable profile.
 - Added immutable extension generations, monotonic streams, evidence-based Chromium delivery, encrypted recovery state, and a durable profile-switch FSM.
 - Added visit-ID echo suppression so Safari-imported Chromium visits are not written back to Safari.
+- Avoided reopening an already-running Agent when enabling the login item, preventing a misleading macOS launch error.
 - Added exact compatibility gating for the qualified macOS 26.6.2 / Safari 21624.5.1.11.3 tuple.
 - Removed bookmark, Reading List, open-tab, tab-group, deletion, and backfill synchronization.
 
