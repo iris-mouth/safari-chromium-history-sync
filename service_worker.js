@@ -1,1 +1,1 @@
-importScripts("background.js?v=5.9");
+import "./extension/worker.js";

@@ -1,7 +1,7 @@
 {
   "name": "chrome-to-safari-sync",
-  "version": "5.9.0",
-  "description": "Local Safari and Chromium bookmark, Reading List, tab, and history sync for macOS.",
+  "version": "6.0.0",
+  "description": "Local bidirectional Safari and Chrome/Edge history sync for macOS.",
   "license": "MIT",
   "homepage": "https://github.com/brycemcole/chrome-to-safari-sync",
   "repository": {
@@ -15,15 +15,15 @@
     "safari",
     "chrome",
     "chromium",
-    "bookmarks",
     "history",
-    "reading-list",
     "native-messaging",
     "macos",
-    "helium-browser"
+    "edge"
   ],
   "scripts": {
     "check": "./scripts/check.sh",
+    "test": "node --test tests/*.test.js",
     "doctor": "./doctor.sh"
-  }
+  },
+  "type": "module"
 }

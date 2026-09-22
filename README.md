@@ -1,169 +1,73 @@
-# Safari Sync
+# Safari History Sync
 
-Safari Sync is a local macOS bridge that keeps Safari and Chromium-family browsers closer to the same browsing state. It syncs bookmarks, Favorites, Reading List entries, tab mirrors, tab groups, and history between Safari's local data stores and a Chromium extension.
+Safari History Sync keeps **new** history visits synchronized in both directions between Safari and exactly one active Google Chrome Stable or Microsoft Edge Stable profile on macOS. Safari remains the iCloud path to iPhone and iPad.
 
-It was built for people who use a Chromium browser day to day but still rely on Safari and iCloud to make bookmarks and history available on iPhone, iPad, and other Macs. The intent is to make Safari reflect what you do in Chromium without needing Safari open, while still keeping the implementation inspectable and self-hosted.
+Version 6 is a history-only rewrite. It intentionally does not sync bookmarks, Reading List, tabs, tab groups, deletions, or old history. It does not use Chrome as an Edge hub. A Safari visit delivered to Chrome/Edge is a new delivery-time visit because Chromium cannot preserve an external visit timestamp.
 
-This is not a cloud service and it is not a Chrome Web Store package. It is an unpacked Manifest V3 extension plus a Python native messaging host.
+## Safety boundary
 
-## Why This Exists
+The installation contains two app bundles and three separately signed executables:
 
-Apple does not provide a public API for third-party browsers to write Safari bookmarks, Reading List, iCloud Tabs, or Safari history. Chromium also does not provide APIs that perfectly preserve external history timestamps when adding visits back into Chromium.
+- `SafariSyncMenu`: menu UI and profile selection; no Full Disk Access.
+- `SafariSyncAgent.app`: an independent sibling app and the only process granted Full Disk Access; owns Safari DB access and durable state.
+- `SafariSyncBridge`: Native Messaging stdin/stdout bridge; no Full Disk Access.
 
-Safari Sync takes the pragmatic local route:
+Bridge and Menu requests use role-bound HMAC authentication over a mode-`0600` Unix socket. The IPC key is a random mode-`0600` file owned by the current user; Bridge and Menu never access Keychain. Agent state, including URLs and recovery records, is sealed with AES-GCM using an Agent-only Keychain root secret. The extension requests only `history`, `storage`, `nativeMessaging`, and `alarms`.
 
-- A Chromium extension observes Chromium bookmarks, history, tabs, tab groups, and Reading List entries.
-- A native messaging host reads and writes Safari's local bookmark plist and history database.
-- Safari/iCloud then decides when those local Safari changes propagate to other Apple devices.
+The writer fails closed outside the qualified tuple:
 
-The project is useful when Safari is your cross-device source of truth, but another Chromium browser is where most browsing actually happens.
+- macOS 26.6.2 (25G83)
+- Safari 21624.5.1.11.3
+- the qualified `com.apple.Safari.History` binary hash
+- the exact tested `history_items`, `history_visits`, and `metadata` schema
 
-## Current Scope
+## Build
 
-- Safari bookmarks <-> Chromium bookmarks
-- Safari Favorites <-> Chromium Bookmarks Bar
-- Safari regular bookmarks <-> Chromium Other Bookmarks
-- Safari Reading List <-> Chromium Reading List, when the browser exposes the API
-- Chromium history -> Safari history with original visit timestamps where Chromium exposes them
-- New Safari history visits -> Chromium history while the Chromium browser and extension are active
-- Chromium tab groups -> generated Safari folders under `Tab Groups`
-- Chromium open tabs -> generated Safari folders under `Open Tabs / <Browser>`
-
-Generated `Open Tabs` and `Tab Groups` folders are intentionally not pushed back into Chromium as normal bookmarks.
-
-## Supported Browsers
-
-The installer knows the native messaging locations for:
-
-- Google Chrome
-- Google Chrome Beta
-- Google Chrome Canary
-- Chromium
-- Brave
-- Microsoft Edge
-- Arc
-- Helium
-
-Other Chromium browsers can work if you add their native messaging host directory to `setup.sh`.
-
-## Requirements
-
-- macOS with Safari installed
-- Python 3
-- A Chromium-based browser with unpacked extension support and native messaging
-- Node.js only for development checks
-
-## Install
-
-Clone the repo:
-
-```sh
-git clone https://github.com/brycemcole/chrome-to-safari-sync.git
-cd chrome-to-safari-sync
-```
-
-Load the extension:
-
-1. Open `chrome://extensions` in your Chromium browser.
-2. Enable Developer Mode.
-3. Click **Load unpacked**.
-4. Select this repository directory.
-5. Copy the extension ID shown by the browser.
-
-Install the native messaging host:
-
-```sh
-./setup.sh
-```
-
-Paste the extension ID when prompted. If multiple browsers show different extension IDs for the unpacked extension, paste all IDs separated by spaces or commas.
-
-Reload the extension from `chrome://extensions`.
-
-## Runtime Files
-
-By default, runtime state, logs, and Safari bookmark backups are stored in:
-
-```text
-~/Library/Application Support/Safari Sync
-```
-
-The native host reads and writes:
-
-```text
-~/Library/Safari/Bookmarks.plist
-~/Library/Safari/History.db
-```
-
-You can override paths for testing:
-
-```sh
-SAFARI_SYNC_STATE_DIR=/tmp/safari-sync-state \
-SAFARI_BOOKMARKS_PATH=/tmp/Bookmarks.plist \
-SAFARI_HISTORY_PATH=/tmp/History.db \
-./run.sh
-```
-
-## Configuration
-
-The popup shows native-host status, last sync counts, a manual **Sync Now** button, pause/resume, and recent activity.
-
-The options page supports:
-
-- Bidirectional, Chromium -> Safari, or Safari -> Chromium modes
-- History sync on/off
-- Reading List sync on/off
-- Chromium tab group mirroring on/off
-- Chromium open tab mirroring on/off
-- Custom generated folder names for open tabs and tab groups
-
-Run the setup doctor when sync is not starting:
-
-```sh
-./doctor.sh
-```
-
-## Safety Model
-
-Safari Sync is intentionally local and transparent, but it does write private browser data stores.
-
-- Bookmark writes create timestamped backups in the runtime backup folder.
-- History writes are insert-only and dedupe near-identical visits.
-- Safari history rows use Safari's current history generation metadata instead of generation `0`.
-- Safari-to-Chromium history cannot preserve original visit times because Chromium's extension API does not expose that capability.
-- iCloud propagation is controlled by macOS/iCloud, not this project.
-
-Before changing sync behavior, test against copied Safari files by setting `SAFARI_BOOKMARKS_PATH` and `SAFARI_HISTORY_PATH`.
-
-## Development
-
-Run checks:
+Requirements are Apple command-line build tools and Node.js for development tests. Python and Node.js are not runtime dependencies.
 
 ```sh
 ./scripts/check.sh
-./doctor.sh
+./scripts/package-app.sh
 ```
 
-Avoid `python3 -m py_compile` in the extension root. It creates `__pycache__`, and Chromium may reject unpacked extensions containing that directory.
+For Developer ID signing and notarization:
 
-Architecture notes live in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+```sh
+CODESIGN_IDENTITY='Developer ID Application: …' \
+NOTARY_PROFILE='notary-profile' \
+./scripts/package-app.sh
+```
 
-## Privacy
+Without `CODESIGN_IDENTITY`, packaging uses an ad-hoc signature for local development only.
 
-Do not commit runtime files. They can reveal bookmark URLs, open tabs, folder names, and browsing history.
+## Install
 
-Ignored local files include:
+1. Build the apps and move both `dist/Safari History Sync.app` and `dist/SafariSyncAgent.app` to `/Applications`.
+2. Load this repository as an unpacked extension in Chrome Stable and/or Edge Stable.
+3. Install only the required Native Messaging manifests:
 
-- `state.json`
-- `sync.log`
-- `backups/`
-- Safari plist backups
+   ```sh
+   ./setup.sh --chrome-id aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+              --edge-id bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
+              --app '/Applications/Safari History Sync.app'
+   ```
 
-## Project Intent
+4. Open the Menu app and choose **Enable Agent**. This registers the Menu app as a login item and launches the sibling Agent. At login, the Menu app launches the Agent automatically.
+5. Grant Full Disk Access to `/Applications/SafariSyncAgent.app` only. Do not grant it to Chrome, Edge, the Menu app, or the Bridge.
+6. Use the menu to choose the single active profile. A switch does not complete until the old extension acknowledges its freeze.
 
-The project should stay boring and inspectable:
+Do not install version 6 beside the legacy Python writer. Remove the old `com.local.safari_bookmark_sync` manifests before enabling the Agent.
 
-- Prefer deterministic local sync over cloud dependencies.
-- Prefer reversible bookmark writes with backups.
-- Treat Safari history writes as a narrow compatibility layer, not a general database migration tool.
-- Keep browser-specific behavior isolated so new Chromium-family browsers can be added without changing the sync core.
+## Runtime behavior
+
+- Browser `onVisited` events only mark a URL dirty. A resolver reads the most recent 64 visits ordered by `visitTime DESC, visitId DESC`, then assigns durable random event IDs.
+- Browser-to-Safari inserts run under `BEGIN IMMEDIATE`, use `origin=0`, advance `current_generation` from `max(current_generation,last_synced_generation)+1`, and never modify `last_synced_generation`.
+- At UTC five-minute boundaries, a pending Safari upload launches Safari with `open -gj` only when Safari is stopped. The Agent never terminates Safari.
+- Safari-to-browser delivery is globally single-flight. `chrome.history.addUrl` is followed by fresh `getVisits` evidence at cumulative 1/3/8/18/30-second deadlines.
+- A confirmed Safari-imported Chromium visit becomes that URL's visit marker, so its `onVisited` callback is not echoed back to Safari; a later real visit remains eligible for sync.
+- A delivery gets at most two immediate attempts. Unconfirmed outcomes enter the encrypted profile-scoped recovery ledger at 5m/15m/30m/2h/6h intervals, capped at 20 retries and retained when exhausted.
+- Database replacement or an arrival-anchor mismatch stops scanning. Resume from the current point only after explicit operator action.
+
+Run `./doctor.sh` after installation. Runtime files live in `~/Library/Application Support/Safari History Sync` and can contain private browsing URLs.
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for protocol and failure semantics.

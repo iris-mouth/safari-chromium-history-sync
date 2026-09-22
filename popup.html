@@ -10,7 +10,7 @@
   <header class="topbar">
     <div>
       <h1>Safari Sync</h1>
-      <p id="statusDetail">Loading</p>
+      <p id="statusDetail">Loading history sync status</p>
     </div>
     <span id="statePill" class="pill">...</span>
   </header>
@@ -18,45 +18,30 @@
   <main>
     <section class="actions">
       <button id="syncNow" type="button">Sync Now</button>
-      <label class="toggle">
-        <input id="pauseToggle" type="checkbox">
-        <span>Paused</span>
-      </label>
     </section>
 
     <section class="stats" aria-label="Sync status">
       <div>
-        <span class="label">Native host</span>
-        <strong id="nativeStatus">Unknown</strong>
+        <span class="label">Active profile</span>
+        <strong id="activeProfile">None</strong>
       </div>
       <div>
-        <span class="label">Last sync</span>
-        <strong id="lastSync">Never</strong>
+        <span class="label">Switch state</span>
+        <strong id="switchState">Unknown</strong>
       </div>
       <div>
-        <span class="label">Last run</span>
-        <strong id="lastCounts">+0 -0 ~0</strong>
+        <span class="label">To Safari</span>
+        <strong id="toSafari">0</strong>
       </div>
       <div>
-        <span class="label">Queue</span>
-        <strong id="queueLength">0</strong>
+        <span class="label">To browser</span>
+        <strong id="toBrowser">0</strong>
       </div>
     </section>
 
     <section id="errorBox" class="error" hidden></section>
 
-    <section class="historyBlock">
-      <div class="sectionHead">
-        <h2>Recent Activity</h2>
-        <button id="clearHistory" type="button" class="linkButton">Clear</button>
-      </div>
-      <ol id="historyList" class="history"></ol>
-    </section>
   </main>
-
-  <footer>
-    <button id="optionsBtn" type="button" class="secondary">Options</button>
-  </footer>
 
   <script src="popup.js"></script>
 </body>

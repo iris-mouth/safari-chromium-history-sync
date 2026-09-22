@@ -4,7 +4,7 @@ Contributions should keep the project local, inspectable, and reversible.
 
 ## Setup
 
-Load the extension unpacked, run `./setup.sh`, then reload the extension from `chrome://extensions`.
+Build the app, load the extension unpacked, and install a manifest only for the browser under test. Do not enable the Agent until the legacy writer is stopped.
 
 Run checks before opening a PR:
 
@@ -15,22 +15,15 @@ Run checks before opening a PR:
 
 ## Testing Safely
 
-Do not test new Safari write behavior against your live Safari files first.
+Do not test new Safari write behavior against live Safari history first. The Swift integration executable creates an exact-schema temporary SQLite database and exercises the public Agent interfaces:
 
 Use copied files:
 
 ```sh
-mkdir -p /tmp/safari-sync-test
-cp ~/Library/Safari/Bookmarks.plist /tmp/safari-sync-test/Bookmarks.plist
-sqlite3 ~/Library/Safari/History.db ".backup '/tmp/safari-sync-test/History.db'"
-
-SAFARI_SYNC_STATE_DIR=/tmp/safari-sync-test/state \
-SAFARI_BOOKMARKS_PATH=/tmp/safari-sync-test/Bookmarks.plist \
-SAFARI_HISTORY_PATH=/tmp/safari-sync-test/History.db \
-./run.sh
+./scripts/check.sh
 ```
 
-Then validate the copied plist with `plutil` and the copied history database with `sqlite3`.
+For a manual copied-DB test, set `SAFARI_SYNC_HISTORY_PATH`, `SAFARI_SYNC_STATE_DIR`, and `SAFARI_SYNC_SOCKET_PATH` before launching `SafariSyncAgent`. Keep the socket and state in a newly created temporary directory. Never run a copied-DB Agent concurrently with the installed Agent.
 
 ## Pull Request Expectations
 
@@ -42,4 +35,4 @@ Include:
 - How you tested it
 - Whether live Safari files were touched
 
-Avoid committing logs, state files, Safari backups, browser profile files, or screenshots that reveal private URLs.
+Avoid committing sealed state, delivery ledgers, Safari databases, browser profile files, or screenshots that reveal private URLs.

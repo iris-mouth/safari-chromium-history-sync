@@ -4,21 +4,22 @@ Safari Sync handles private browsing data locally. Reports involving data exposu
 
 ## Sensitive Data
 
-These files can contain private URLs, folder names, history, and open tabs:
+These files contain private history state:
 
-- `~/Library/Application Support/Safari Sync/state.json`
-- `~/Library/Application Support/Safari Sync/sync.log`
-- `~/Library/Application Support/Safari Sync/backups/`
-- `~/Library/Safari/Bookmarks.plist`
+- `~/Library/Application Support/Safari History Sync/state.sealed`
+- `~/Library/Application Support/Safari History Sync/delivery-ledger.sqlite`
 - `~/Library/Safari/History.db`
 
 Do not attach those files publicly unless you have scrubbed them.
 
 ## Design Constraints
 
-- The native host writes Safari's local files because Apple does not provide a supported public sync API for this use case.
+- Only `SafariSyncAgent` receives Full Disk Access and writes Safari's history database.
+- The no-FDA Bridge and Menu authenticate to the Agent over a mode-`0600` Unix socket using a random owner-only mode-`0600` IPC key.
+- Sensitive Agent state is sealed with AES-GCM using an Agent-only Keychain root secret; Bridge and Menu never access Keychain.
 - Safari history sync is intentionally narrow and insert-only.
-- Browser extension permissions are broad because bookmarks, history, tabs, tab groups, Reading List, storage, alarms, and native messaging are all part of the sync surface.
+- Unknown OS, Safari, CloudHistory binary, and database-schema tuples fail closed.
+- Browser extension permissions are limited to history, storage, alarms, and native messaging.
 
 ## Reporting
 

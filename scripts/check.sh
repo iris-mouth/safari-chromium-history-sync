@@ -2,18 +2,24 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CHECK_TMP="$(mktemp -d)"
+trap 'rm -rf "$CHECK_TMP"' EXIT
 
-node --check "$ROOT/background.js"
+if [[ -z "${SDKROOT:-}" \
+  && "$(xcode-select -p)" == "/Library/Developer/CommandLineTools" \
+  && -d /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk ]]; then
+  export SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk
+fi
+export CLANG_MODULE_CACHE_PATH="$CHECK_TMP/clang-cache"
+export SWIFTPM_MODULECACHE_OVERRIDE="$CHECK_TMP/swift-cache"
+
 node --check "$ROOT/service_worker.js"
+node --check "$ROOT/extension/protocol.js"
+node --check "$ROOT/extension/sync_controller.js"
+node --check "$ROOT/extension/chrome_generation_store.js"
+node --check "$ROOT/extension/worker.js"
 node --check "$ROOT/popup.js"
-node --check "$ROOT/options.js"
-
-python3 - "$ROOT/safari_sync.py" <<'PY'
-import ast
-import sys
-
-with open(sys.argv[1]) as f:
-    ast.parse(f.read())
-PY
+npm --prefix "$ROOT" test
+swift run --package-path "$ROOT" --scratch-path "$CHECK_TMP/build" SafariSyncCoreIntegrationTests
 
 echo "checks passed"

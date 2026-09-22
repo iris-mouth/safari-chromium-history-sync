@@ -27,6 +27,9 @@ __pycache__/
 .DS_Store
 .idea/
 .vscode/
+.build/
+dist/
+.validation-backups/
 
 # Local native messaging manifests if copied into the repo.
 com.local.safari_bookmark_sync.json

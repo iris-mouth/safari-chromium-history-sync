@@ -2,30 +2,22 @@
   "manifest_version": 3,
   "name": "Safari Sync",
   "short_name": "Safari Sync",
-  "version": "5.9",
-  "description": "Bidirectional local sync for Safari and Chromium bookmarks, reading list, tabs, and history on macOS.",
+  "version": "6.0",
+  "description": "Bidirectional local history sync between Safari and one active Chrome or Edge profile on macOS.",
   "homepage_url": "https://github.com/brycemcole/chrome-to-safari-sync",
   "author": "Bryce Cole",
   "permissions": [
-    "bookmarks",
     "history",
     "nativeMessaging",
-    "readingList",
     "storage",
-    "alarms",
-    "tabs",
-    "tabGroups",
-    "windows"
+    "alarms"
   ],
   "background": {
-    "service_worker": "service_worker.js"
+    "service_worker": "service_worker.js",
+    "type": "module"
   },
   "action": {
     "default_title": "Safari Sync",
     "default_popup": "popup.html"
-  },
-  "options_ui": {
-    "page": "options.html",
-    "open_in_tab": true
   }
 }

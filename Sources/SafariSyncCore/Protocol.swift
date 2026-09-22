@@ -1,0 +1,134 @@
+import Foundation
+
+public let safariSyncProtocolVersion = 1
+public let safariSyncMaximumPageSize = 128
+
+public struct SyncEvent: Codable, Equatable, Sendable {
+    public let eventID: String
+    public let sequence: Int64
+    public let url: URL
+
+    public init(eventID: String, sequence: Int64, url: URL) {
+        self.eventID = eventID
+        self.sequence = sequence
+        self.url = url
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case eventID = "eventId"
+        case sequence, url
+    }
+}
+
+public struct BrowserMessage: Codable, Sendable {
+    public let version: Int
+    public let operation: String
+    public let profileID: String
+    public let events: [SyncEvent]?
+    public let afterSequence: Int64?
+    public let throughSequence: Int64?
+    public let limit: Int?
+    public let stream: String?
+    public let eventID: String?
+    public let outcome: String?
+
+    enum CodingKeys: String, CodingKey {
+        case version, operation, events, limit, stream, outcome
+        case eventID = "eventId"
+        case profileID = "profileId"
+        case afterSequence, throughSequence
+    }
+}
+
+public struct TypedError: Codable, Error, Equatable, Sendable {
+    public let type: String
+    public let code: String
+    public let retryable: Bool
+
+    public init(code: String, retryable: Bool = false) {
+        self.type = "error"
+        self.code = code
+        self.retryable = retryable
+    }
+}
+
+public struct HealthSnapshot: Codable, Equatable, Sendable {
+    public let protocolVersion: Int
+    public let enabled: Bool
+    public let activeProfileID: String?
+    public let stagingProfileID: String?
+    public let switchState: String
+    public let pendingBrowserToSafari: Int
+    public let pendingSafariToBrowser: Int
+    public let recoveryCount: Int
+    public let unrecoverableCount: Int
+
+    enum CodingKeys: String, CodingKey {
+        case protocolVersion, enabled, switchState
+        case activeProfileID = "activeProfileId"
+        case stagingProfileID = "stagingProfileId"
+        case pendingBrowserToSafari, pendingSafariToBrowser
+        case recoveryCount, unrecoverableCount
+    }
+}
+
+public struct MenuCommand: Codable, Sendable {
+    public let operation: String
+    public let profileID: String?
+
+    public init(operation: String, profileID: String? = nil) {
+        self.operation = operation
+        self.profileID = profileID
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case operation
+        case profileID = "profileId"
+    }
+}
+
+public struct ProfileSwitchStatus: Codable, Sendable {
+    public let state: String
+    public let profileID: String
+
+    public init(state: String, profileID: String) {
+        self.state = state
+        self.profileID = profileID
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case state
+        case profileID = "profileId"
+    }
+}
+
+public enum ExchangeResponse: Encodable, Sendable {
+    case receipt(status: String, throughSequence: Int64? = nil)
+    case page(stream: String, events: [SyncEvent], hasMore: Bool)
+    case failure(TypedError)
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: DynamicKey.self)
+        switch self {
+        case let .receipt(status, throughSequence):
+            try container.encode("receipt", forKey: DynamicKey("type"))
+            try container.encode(status, forKey: DynamicKey("status"))
+            try container.encodeIfPresent(throughSequence, forKey: DynamicKey("throughSequence"))
+        case let .page(stream, events, hasMore):
+            try container.encode("page", forKey: DynamicKey("type"))
+            try container.encode(stream, forKey: DynamicKey("stream"))
+            try container.encode(events, forKey: DynamicKey("events"))
+            try container.encode(hasMore, forKey: DynamicKey("hasMore"))
+        case let .failure(error):
+            try error.encode(to: encoder)
+        }
+    }
+}
+
+private struct DynamicKey: CodingKey {
+    let stringValue: String
+    let intValue: Int? = nil
+    init(_ value: String) { stringValue = value }
+    init?(stringValue: String) { self.init(stringValue) }
+    init?(intValue: Int) { return nil }
+}
