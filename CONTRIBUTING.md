@@ -4,14 +4,15 @@ Contributions should keep the project local, inspectable, and reversible.
 
 ## Setup
 
-Build the app, load the extension unpacked, and install a manifest only for the browser under test. Do not enable the Agent until the legacy writer is stopped.
+Build the app, open it, and use **Start Setup** to select only the browser under test. Load the extension from the app's bundled `ChromiumExtension` folder. Do not start synchronization until the legacy writer is stopped.
 
 Run checks before opening a PR:
 
 ```sh
 ./scripts/check.sh
-./doctor.sh
 ```
+
+`./scripts/package-app.sh` creates ad-hoc-signed app bundles and an unsigned, payload-only PKG for local testing. Distribution builds additionally set `CODESIGN_IDENTITY`, `INSTALLER_IDENTITY`, and `NOTARY_PROFILE`. The PKG must continue to contain only the two sibling app bundles under `/Applications`; do not add installer scripts or user-specific Native Messaging files to it.
 
 ## Testing Safely
 
@@ -36,3 +37,5 @@ Include:
 - Whether live Safari files were touched
 
 Avoid committing sealed state, delivery ledgers, Safari databases, browser profile files, or screenshots that reveal private URLs.
+
+When changing setup behavior, verify Chrome-only, Edge-only, and both-browser selections. An unselected browser must not gain a Native Messaging directory or manifest. Use the app's **Setup & Diagnostics** screen for installation checks rather than introducing a second shell implementation.

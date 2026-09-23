@@ -7,12 +7,8 @@ import {
 } from "./protocol.js";
 
 const DEFAULT_STATE = Object.freeze({
-  schemaVersion: 1,
+  schemaVersion: 2,
   generation: 0,
-  enabled: false,
-  activeProfileId: null,
-  stagingProfileId: null,
-  switchState: "STABLE",
   nextBrowserToSafariSequence: 1,
   nextSafariToBrowserSequence: 1,
   browserToSafari: [],
@@ -25,8 +21,47 @@ const DEFAULT_STATE = Object.freeze({
 const MAX_SEEN_SOURCE_EVENTS = 50_000;
 
 function initialState(raw) {
-  if (!raw || raw.schemaVersion !== 1) return structuredClone(DEFAULT_STATE);
-  return { ...structuredClone(DEFAULT_STATE), ...raw };
+  if (!raw || (raw.schemaVersion !== 1 && raw.schemaVersion !== 2)) {
+    return structuredClone(DEFAULT_STATE);
+  }
+  const legacyProfileId = typeof raw.activeProfileId === "string"
+    ? raw.activeProfileId
+    : null;
+  const scoped = (value) => legacyProfileId ? scopedKey(legacyProfileId, value) : value;
+  return {
+    ...structuredClone(DEFAULT_STATE),
+    generation: Number.isSafeInteger(raw.generation) ? raw.generation : 0,
+    nextBrowserToSafariSequence: Number.isSafeInteger(raw.nextBrowserToSafariSequence)
+      ? raw.nextBrowserToSafariSequence
+      : 1,
+    nextSafariToBrowserSequence: Number.isSafeInteger(raw.nextSafariToBrowserSequence)
+      ? raw.nextSafariToBrowserSequence
+      : 1,
+    browserToSafari: Array.isArray(raw.browserToSafari)
+      ? raw.browserToSafari.map((event) => ({
+        ...event,
+        profileId: event.profileId ?? legacyProfileId,
+      }))
+      : [],
+    safariToBrowser: Array.isArray(raw.safariToBrowser)
+      ? raw.safariToBrowser.map((event) => ({
+        ...event,
+        profileId: event.profileId ?? legacyProfileId,
+      }))
+      : [],
+    seenBrowserEventIds: Array.isArray(raw.seenBrowserEventIds)
+      ? raw.seenBrowserEventIds.map(raw.schemaVersion === 1 ? scoped : String)
+      : [],
+    seenBrowserSourceKeys: Array.isArray(raw.seenBrowserSourceKeys)
+      ? raw.seenBrowserSourceKeys.map(raw.schemaVersion === 1 ? scoped : String)
+      : [],
+    recoveryCount: Number.isSafeInteger(raw.recoveryCount) ? raw.recoveryCount : 0,
+    unrecoverableCount: Number.isSafeInteger(raw.unrecoverableCount) ? raw.unrecoverableCount : 0,
+  };
+}
+
+function scopedKey(profileId, value) {
+  return `${profileId.length}:${profileId}${value}`;
 }
 
 function safeLimit(value) {
@@ -53,36 +88,11 @@ export function createSyncController({ store }) {
     return next;
   };
 
-  async function selectProfile(profileId) {
-    if (typeof profileId !== "string" || !profileId.trim()) {
-      return typedError("INVALID_PROFILE");
-    }
-    return transact((state) => {
-      if (!state.activeProfileId || state.activeProfileId === profileId) {
-        state.activeProfileId = profileId;
-        state.stagingProfileId = null;
-        state.switchState = "STABLE";
-        return { state: "ACTIVE", activeProfileId: profileId };
-      }
-      state.stagingProfileId = profileId;
-      state.switchState = "AWAITING_FREEZE_ACK";
-      return {
-        state: "AWAITING_FREEZE_ACK",
-        activeProfileId: state.activeProfileId,
-        stagingProfileId: profileId,
-      };
-    });
-  }
-
   async function status() {
     await serial;
     const state = initialState(await store.load());
     return {
       protocolVersion: PROTOCOL_VERSION,
-      enabled: state.enabled,
-      activeProfileId: state.activeProfileId,
-      stagingProfileId: state.stagingProfileId,
-      switchState: state.switchState,
       pendingBrowserToSafari: state.browserToSafari.filter((event) => !event.acked).length,
       pendingSafariToBrowser: state.safariToBrowser.filter((event) => !event.acked).length,
       recoveryCount: state.recoveryCount,
@@ -95,26 +105,6 @@ export function createSyncController({ store }) {
     if (envelopeError) return envelopeError;
 
     return transact((state) => {
-      if (message.operation === "freezeAck") {
-        if (state.switchState !== "AWAITING_FREEZE_ACK" ||
-            message.profileId !== state.activeProfileId ||
-            !state.stagingProfileId) {
-          return typedError("UNEXPECTED_FREEZE_ACK");
-        }
-        state.activeProfileId = state.stagingProfileId;
-        state.stagingProfileId = null;
-        state.switchState = "STABLE";
-        return {
-          type: "receipt",
-          status: "PROFILE_ACTIVATED",
-          activeProfileId: state.activeProfileId,
-        };
-      }
-
-      if (message.profileId !== state.activeProfileId || state.switchState !== "STABLE") {
-        return typedError("PROFILE_NOT_ACTIVE", true);
-      }
-
       if (message.operation === "publish") {
         if (!Array.isArray(message.events) || message.events.length > MAX_PAGE_EVENTS) {
           return typedError("INVALID_PAGE");
@@ -129,7 +119,11 @@ export function createSyncController({ store }) {
         const seenSources = new Set(state.seenBrowserSourceKeys);
         const accepted = [];
         for (const event of message.events) {
-          if (seen.has(event.eventId) || (event.sourceKey && seenSources.has(event.sourceKey))) continue;
+          const eventKey = scopedKey(message.profileId, event.eventId);
+          const sourceKey = event.sourceKey
+            ? scopedKey(message.profileId, event.sourceKey)
+            : null;
+          if (seen.has(eventKey) || (sourceKey && seenSources.has(sourceKey))) continue;
           const queued = {
             sequence: state.nextBrowserToSafariSequence++,
             eventId: event.eventId,
@@ -139,12 +133,12 @@ export function createSyncController({ store }) {
           };
           if (event.sourceKey) queued.sourceKey = event.sourceKey;
           state.browserToSafari.push(queued);
-          state.seenBrowserEventIds.push(event.eventId);
-          if (event.sourceKey) {
-            state.seenBrowserSourceKeys.push(event.sourceKey);
-            seenSources.add(event.sourceKey);
+          state.seenBrowserEventIds.push(eventKey);
+          if (sourceKey) {
+            state.seenBrowserSourceKeys.push(sourceKey);
+            seenSources.add(sourceKey);
           }
-          seen.add(event.eventId);
+          seen.add(eventKey);
           accepted.push({ eventId: queued.eventId, sequence: queued.sequence });
         }
         if (state.seenBrowserEventIds.length > MAX_SEEN_SOURCE_EVENTS) {
@@ -165,14 +159,16 @@ export function createSyncController({ store }) {
           : state.safariToBrowser;
         const after = Number.isSafeInteger(message.afterSequence) ? message.afterSequence : 0;
         const events = source
-          .filter((event) => event.sequence > after && !event.acked)
+          .filter((event) =>
+            event.profileId === message.profileId && event.sequence > after && !event.acked)
           .slice(0, safeLimit(message.limit));
         return {
           type: "page",
           stream,
           events,
           hasMore: source.some(
-            (event) => event.sequence > (events.at(-1)?.sequence ?? after) && !event.acked,
+            (event) => event.profileId === message.profileId &&
+              event.sequence > (events.at(-1)?.sequence ?? after) && !event.acked,
           ),
         };
       }
@@ -185,7 +181,8 @@ export function createSyncController({ store }) {
           ? state.browserToSafari
           : state.safariToBrowser;
         for (const event of source) {
-          if (event.sequence <= message.throughSequence) event.acked = true;
+          if (event.profileId === message.profileId &&
+              event.sequence <= message.throughSequence) event.acked = true;
         }
         if (message.stream === "browserToSafari") {
           state.browserToSafari = state.browserToSafari.filter((event) => !event.acked);
@@ -199,5 +196,5 @@ export function createSyncController({ store }) {
     });
   }
 
-  return { browserExchange, selectProfile, status };
+  return { browserExchange, status };
 }

@@ -4,7 +4,7 @@ Safari Chromium History Sync keeps **new** history visits synchronized in both d
 
 Version 6 is a history-only rewrite. It intentionally does not sync bookmarks, Reading List, tabs, tab groups, deletions, or old history. It does not use Chrome as an Edge hub. A Safari visit delivered to Chrome/Edge is a new delivery-time visit because Chromium cannot preserve an external visit timestamp.
 
-## Safety boundary
+## Safety and threat boundary
 
 The installation contains two app bundles and three separately signed executables:
 
@@ -12,7 +12,9 @@ The installation contains two app bundles and three separately signed executable
 - `SafariSyncAgent.app`: an independent sibling app and the only process granted Full Disk Access; owns Safari DB access and durable state.
 - `SafariSyncBridge`: Native Messaging stdin/stdout bridge; no Full Disk Access.
 
-Bridge and Menu requests use role-bound HMAC authentication over a mode-`0600` Unix socket. The IPC key is a random mode-`0600` file owned by the current user; Bridge and Menu never access Keychain. Agent state, including URLs and recovery records, is sealed with AES-GCM using an Agent-only Keychain root secret. The extension requests only `history`, `storage`, `nativeMessaging`, and `alarms`.
+Bridge and Menu requests use role-bound HMAC authentication over a mode-`0600` Unix socket. The IPC key is a random mode-`0600` file owned by the current user; Bridge and Menu never access Keychain. This rejects malformed, unauthenticated, and replayed traffic, but it is not an identity boundary against other processes already running as the same macOS user: such a process can read the shared IPC key. Agent state, including URLs and recovery records, is sealed with AES-GCM using an Agent-only Keychain root secret. The extension requests only `history`, `storage`, `nativeMessaging`, and `alarms`.
+
+The design protects against accidental cross-profile delivery, browser-sandbox callers without the native host connection, corrupted input, unsupported Safari database layouts, and processes belonging to another macOS user. It does not claim to protect history from an attacker who already controls the current macOS account. The fixed unpacked-extension key makes its extension ID stable for Native Messaging configuration; it identifies the extension origin but does not prove that unpacked source is trustworthy.
 
 The writer fails closed outside the qualified tuple:
 
@@ -30,33 +32,29 @@ Requirements are Apple command-line build tools and Node.js for development test
 ./scripts/package-app.sh
 ```
 
-For Developer ID signing and notarization:
+The packaging script creates both standalone app bundles and a payload-only PKG that installs both apps under `/Applications`. It contains no preinstall or postinstall scripts. Without signing variables, it uses ad-hoc app signatures and an unsigned PKG for local development.
+
+For Developer ID signing and PKG notarization:
 
 ```sh
 CODESIGN_IDENTITY='Developer ID Application: …' \
+INSTALLER_IDENTITY='Developer ID Installer: …' \
 NOTARY_PROFILE='notary-profile' \
 ./scripts/package-app.sh
 ```
 
-Without `CODESIGN_IDENTITY`, packaging uses an ad-hoc signature for local development only.
-
 ## Install
 
-1. Build the apps and move both `dist/Safari Chromium History Sync.app` and `dist/SafariSyncAgent.app` to `/Applications`.
-2. Load this repository as an unpacked extension in Chrome Stable and/or Edge Stable.
-3. Install only the required Native Messaging manifests:
+1. Install `Safari-Chromium-History-Sync.pkg`. For a local development build, you may instead move both generated app bundles beside each other in `/Applications`.
+2. Open **Safari Chromium History Sync** and choose **Start Setup**.
+3. Select Chrome Stable, Edge Stable, or both. Setup writes a Native Messaging manifest only for browsers you explicitly select; it does not create files for an installed but unused browser.
+4. Setup opens each selected browser's extensions page and reveals the bundled `ChromiumExtension` folder. Turn on Developer mode, choose **Load unpacked**, and select that folder. Extension and profile IDs are detected automatically; there is nothing to copy and paste.
+5. Approve Open at Login if macOS requests it, then grant Full Disk Access to `/Applications/SafariSyncAgent.app` only. Do not grant it to Chrome, Edge, the Menu app, or the Bridge.
+6. If one browser profile connects, it becomes active automatically. If several connect, choose one in the setup window.
 
-   ```sh
-   ./setup.sh --chrome-id aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
-              --edge-id bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
-              --app '/Applications/Safari Chromium History Sync.app'
-   ```
+Setup is safe to run again. It checks the installed components and changes only product-owned settings for the selected browsers. Deselecting a browser removes only this product's matching manifest. The setup and diagnostics screen reports actionable problems instead of requiring command-line scripts.
 
-4. Open the Menu app and choose **Enable Agent**. This registers the Menu app as a login item and launches the sibling Agent. At login, the Menu app launches the Agent automatically.
-5. Grant Full Disk Access to `/Applications/SafariSyncAgent.app` only. Do not grant it to Chrome, Edge, the Menu app, or the Bridge.
-6. Use the menu to choose the single active profile. A switch does not complete until the old extension acknowledges its freeze.
-
-Do not install version 6 beside the legacy Python writer. Remove the old `com.local.safari_bookmark_sync` manifests before enabling the Agent.
+Do not run version 6 beside the legacy Python writer. Setup reports known `com.local.safari_bookmark_sync` manifests or launch items and waits for you to remove them before synchronization starts.
 
 ## Runtime behavior
 
@@ -66,9 +64,10 @@ Do not install version 6 beside the legacy Python writer. Remove the old `com.lo
 - Safari-to-browser delivery is globally single-flight. `chrome.history.addUrl` is followed by fresh `getVisits` evidence at cumulative 1/3/8/18/30-second deadlines.
 - A confirmed Safari-imported Chromium visit becomes that URL's visit marker, so its `onVisited` callback is not echoed back to Safari; a later real visit remains eligible for sync.
 - A delivery gets at most two immediate attempts. Unconfirmed outcomes enter the encrypted profile-scoped recovery ledger at 5m/15m/30m/2h/6h intervals, capped at 20 retries and retained when exhausted.
+- Changing the active browser profile is immediate. Pending outbox and recovery work remains scoped to the profile that created it and resumes only when that profile is selected again; it is never moved to the new profile.
 - Database replacement or an arrival-anchor mismatch stops scanning. Resume from the current point only after explicit operator action.
 
-Run `./doctor.sh` after installation. Runtime files live in `~/Library/Application Support/Safari History Sync` and can contain private browsing URLs. This legacy internal directory name is intentionally retained so upgrades keep the existing encrypted state and delivery ledger.
+Runtime files live in `~/Library/Application Support/Safari History Sync` and can contain private browsing URLs. This legacy internal directory name is intentionally retained so upgrades keep the existing encrypted state and delivery ledger. Use **Setup & Diagnostics** in the Menu app to inspect the installation without exposing URLs.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for protocol and failure semantics.
 

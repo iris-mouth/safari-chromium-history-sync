@@ -1,5 +1,5 @@
 import { createChromeGenerationStore } from "./chrome_generation_store.js";
-import { PROTOCOL_VERSION, isWebUrl } from "./protocol.js";
+import { PROTOCOL_VERSION, isReceipt, isWebUrl } from "./protocol.js";
 import { createSyncController } from "./sync_controller.js";
 import {
   hasPendingImport,
@@ -80,7 +80,11 @@ async function resolveDirtyVisits() {
 }
 
 function sendNative(message) {
-  return chrome.runtime.sendNativeMessage(HOST, message);
+  return chrome.runtime.sendNativeMessage(HOST, {
+    ...message,
+    browserFamily: browserFamily(),
+    extensionVersion: chrome.runtime.getManifest().version,
+  });
 }
 
 async function pushBrowserPage(state) {
@@ -149,14 +153,6 @@ async function pullSafariPage(state) {
     afterSequence: 0,
     limit: 128,
   });
-  if (page?.type === "error" && page.code === "FREEZE_REQUIRED") {
-    await sendNative({
-      version: PROTOCOL_VERSION,
-      operation: "freezeAck",
-      profileId: state.profileId,
-    });
-    return;
-  }
   if (page?.type === "page") await applySafariPage(state, page);
 }
 
@@ -170,14 +166,14 @@ async function verifyEvidence() {
     if (evidence) {
       state.visitMarkers[pending.url] = String(evidence.visitId);
       if (!hasVisitNewerThan(visits, evidence)) delete state.dirtyUrls[pending.url];
-      await sendNative({
+      const response = await sendNative({
         version: PROTOCOL_VERSION,
         operation: "ack",
         stream: "safariToBrowser",
         profileId: state.profileId,
         throughSequence: pending.sequence,
       });
-      delete state.pendingEvidence[eventId];
+      if (isReceipt(response, "ACKNOWLEDGED")) delete state.pendingEvidence[eventId];
     } else if (pending.attempt < EVIDENCE_DELAYS.length) {
       pending.attempt += 1;
       pending.dueAt = pending.requestedAt + EVIDENCE_DELAYS[pending.attempt - 1];
@@ -194,14 +190,14 @@ async function verifyEvidence() {
       pending.requestedAt = now;
       pending.dueAt = now + EVIDENCE_DELAYS[0];
     } else {
-      await sendNative({
+      const response = await sendNative({
         version: PROTOCOL_VERSION,
         operation: "outcome",
         profileId: state.profileId,
         eventId,
         outcome: "FINALIZED_UNCONFIRMED",
       });
-      delete state.pendingEvidence[eventId];
+      if (isReceipt(response, "RECOVERY_RECORDED")) delete state.pendingEvidence[eventId];
     }
   }
   await saveRuntime(state);
@@ -209,7 +205,6 @@ async function verifyEvidence() {
 
 async function exchange() {
   const state = await runtimeState();
-  await controller.selectProfile(state.profileId);
   await resolveDirtyVisits();
   await verifyEvidence();
   await pushBrowserPage(state);
@@ -232,14 +227,3 @@ chrome.runtime.onInstalled.addListener(() => {
   exclusively(exchange).catch(console.error);
 });
 chrome.runtime.onStartup.addListener(() => exclusively(exchange).catch(console.error));
-
-chrome.runtime.onMessage.addListener((message, _sender, respond) => {
-  const task = message?.action === "status"
-    ? controller.status()
-    : message?.action === "syncNow"
-      ? exclusively(exchange).then(() => controller.status())
-      : Promise.resolve({ type: "error", code: "INVALID_OPERATION", retryable: false });
-  task.then((result) => respond({ ok: true, result }),
-    (error) => respond({ ok: false, error: String(error?.message ?? error) }));
-  return true;
-});

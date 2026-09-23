@@ -9,7 +9,7 @@
 ## Testing
 
 - [ ] `./scripts/check.sh`
-- [ ] `./doctor.sh`
+- [ ] Setup & Diagnostics exercised for each affected browser selection
 - [ ] Tested against copied Safari files before live data
 
 ## Privacy

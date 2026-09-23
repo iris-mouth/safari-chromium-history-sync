@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Replaced manual `setup.sh`, `doctor.sh`, Extension-ID entry, profile-ID entry,
+  and the ambiguous Enable Agent action with an app-driven setup and focused
+  runtime diagnostics flow.
+- Made Chrome and Edge configuration explicit opt-in so unused browsers receive
+  no Native Messaging directory or manifest.
+- Simplified profile changes to an atomic active-profile switch while retaining
+  pending delivery and recovery data under its originating profile.
+- Added a payload-only PKG that installs the signed Menu and Agent sibling apps
+  under `/Applications`, with optional Installer signing and PKG notarization.
+- Documented that owner-only shared-key IPC and a fixed unpacked Extension ID do
+  not establish trust against code already running as the current macOS user.
 - Qualified macOS 27.0 (26A428), Safari 22625.1.29.11.27, and its exact
   `com.apple.Safari.History` binary fingerprint.
 - Disabled SwiftPM's build sandbox for this dependency-free local package because

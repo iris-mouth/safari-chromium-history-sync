@@ -3,8 +3,192 @@ import Foundation
 import os
 import SafariSyncCore
 
-let logger = Logger(subsystem: "com.local.safari-history-sync.agent", category: "requests")
+private final class AgentRuntime: @unchecked Sendable {
+    private let runtimeDirectory: URL
+    private let historyURL: URL
+    private let agentBuild: String?
+    private let lock = NSLock()
+    private var service: AgentService?
+    private var history: SafariHistoryStore?
+    private var runtimeState = "initializing"
+    private var issueCode: String?
+    private var cloudTrigger: DispatchSourceTimer?
 
+    init(runtimeDirectory: URL, historyURL: URL, agentBuild: String?) {
+        self.runtimeDirectory = runtimeDirectory
+        self.historyURL = historyURL
+        self.agentBuild = agentBuild
+    }
+
+    func initialize() {
+        guard LegacyWriterDetector.detect().isEmpty else {
+            block("legacyWriterDetected")
+            return
+        }
+        do {
+            _ = try CompatibilityGate.verify()
+        } catch {
+            block("runtimeUnsupported")
+            return
+        }
+
+        let stateSecret: Data
+        do {
+            stateSecret = try KeychainRootSecret.load(createIfMissing: true)
+        } catch {
+            block("stateUnreadable")
+            return
+        }
+
+        let history = SafariHistoryStore(
+            databaseURL: historyURL,
+            ledgerURL: runtimeDirectory.appendingPathComponent("delivery-ledger.sqlite")
+        )
+        do {
+            try history.validateAccessAndSchema()
+        } catch SafariHistoryError.incompatibleSchema {
+            block("runtimeUnsupported")
+            return
+        } catch {
+            block("safariAccessUnavailable")
+            return
+        }
+
+        let readyService = AgentService(
+            history: history,
+            stateURL: runtimeDirectory.appendingPathComponent("state.sealed"),
+            secret: stateSecret,
+            agentBuild: agentBuild
+        )
+        let timer = makeCloudTrigger(history: history)
+        lock.withLock {
+            service = readyService
+            self.history = history
+            runtimeState = "ready"
+            issueCode = nil
+            cloudTrigger = timer
+        }
+        timer.resume()
+    }
+
+    func health() throws -> HealthSnapshot {
+        let snapshot = lock.withLock { (service, history, runtimeState, issueCode) }
+        if let service = snapshot.0, let history = snapshot.1 {
+            do {
+                try history.validateAccessAndSchema()
+                return try service.status()
+            } catch let error as SafariHistoryError {
+                if error.isTransientContention { return try service.status() }
+                block(issue(for: error))
+                return blockedHealth(issue: issue(for: error))
+            }
+        }
+        return HealthSnapshot(
+            enabled: false,
+            activeProfileID: nil,
+            runtimeState: snapshot.2,
+            issueCode: snapshot.3,
+            agentBuild: agentBuild,
+            pendingBrowserToSafari: 0,
+            pendingSafariToBrowser: 0,
+            recoveryCount: 0,
+            unrecoverableCount: 0
+        )
+    }
+
+    func browserExchange(_ body: Data) throws -> Data {
+        guard let service = lock.withLock({ service }) else {
+            let issue = lock.withLock { issueCode }
+            return try JSONEncoder().encode(TypedError(
+                code: issue ?? "AGENT_INITIALIZING",
+                retryable: true
+            ))
+        }
+        do {
+            return try service.browserExchange(body)
+        } catch let error as SafariHistoryError {
+            if error.isTransientContention {
+                return try JSONEncoder().encode(TypedError(code: "SAFARI_BUSY", retryable: true))
+            }
+            let code = issue(for: error)
+            if code != "INVALID_MESSAGE" { block(code) }
+            return try JSONEncoder().encode(TypedError(code: code, retryable: code == "safariAccessUnavailable"))
+        }
+    }
+
+    func selectProfile(_ profileID: String) throws -> String {
+        guard let service = lock.withLock({ service }) else {
+            throw TypedError(code: lock.withLock { issueCode } ?? "AGENT_INITIALIZING", retryable: true)
+        }
+        do {
+            return try service.selectProfile(profileID)
+        } catch let error as SafariHistoryError {
+            if error.isTransientContention {
+                throw TypedError(code: "SAFARI_BUSY", retryable: true)
+            }
+            let code = issue(for: error)
+            block(code)
+            throw TypedError(code: code, retryable: code == "safariAccessUnavailable")
+        }
+    }
+
+    private func block(_ issue: String) {
+        lock.withLock {
+            service = nil
+            history = nil
+            runtimeState = "blocked"
+            issueCode = issue
+        }
+    }
+
+    private func issue(for error: SafariHistoryError) -> String {
+        switch error {
+        case .incompatibleSchema:
+            "runtimeUnsupported"
+        case .databaseUnavailable, .sqlite:
+            "safariAccessUnavailable"
+        case .invalidURL:
+            "INVALID_MESSAGE"
+        }
+    }
+
+    private func blockedHealth(issue: String) -> HealthSnapshot {
+        HealthSnapshot(
+            enabled: false,
+            activeProfileID: nil,
+            runtimeState: "blocked",
+            issueCode: issue,
+            agentBuild: agentBuild,
+            pendingBrowserToSafari: 0,
+            pendingSafariToBrowser: 0,
+            recoveryCount: 0,
+            unrecoverableCount: 0
+        )
+    }
+
+    private func makeCloudTrigger(history: SafariHistoryStore) -> DispatchSourceTimer {
+        let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+        let now = Date().timeIntervalSince1970
+        let nextBoundary = (floor(now / 300) + 1) * 300
+        timer.schedule(deadline: .now() + (nextBoundary - now), repeating: 300)
+        timer.setEventHandler {
+            guard (try? history.needsCloudTrigger()) == true else { return }
+            let check = Process()
+            check.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+            check.arguments = ["-x", "Safari"]
+            try? check.run()
+            check.waitUntilExit()
+            guard check.terminationStatus != 0 else { return }
+            let launch = Process()
+            launch.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+            launch.arguments = ["-gj", "-a", "Safari"]
+            try? launch.run()
+        }
+        return timer
+    }
+}
+
+let logger = Logger(subsystem: "com.local.safari-history-sync.agent", category: "requests")
 let environment = ProcessInfo.processInfo.environment
 let home = FileManager.default.homeDirectoryForCurrentUser
 let runtimeDirectory = URL(fileURLWithPath: environment["SAFARI_SYNC_STATE_DIR"] ??
@@ -14,46 +198,15 @@ let historyURL = URL(fileURLWithPath: environment["SAFARI_SYNC_HISTORY_PATH"] ??
 let socketPath = environment["SAFARI_SYNC_SOCKET_PATH"] ??
     runtimeDirectory.appendingPathComponent("agent.sock").path
 let ipcSecretURL = runtimeDirectory.appendingPathComponent("ipc.secret")
+let agentBuild = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
 
 do {
-    _ = try CompatibilityGate.verify()
     try FileManager.default.createDirectory(
         at: runtimeDirectory,
         withIntermediateDirectories: true,
         attributes: [.posixPermissions: 0o700]
     )
-    let stateSecret = try KeychainRootSecret.load(createIfMissing: true)
     let ipcSecret = try IPCSecretStore.load(from: ipcSecretURL, createIfMissing: true)
-    let history = SafariHistoryStore(
-        databaseURL: historyURL,
-        ledgerURL: runtimeDirectory.appendingPathComponent("delivery-ledger.sqlite")
-    )
-    try history.validateAccessAndSchema()
-    let service = AgentService(
-        history: history,
-        stateURL: runtimeDirectory.appendingPathComponent("state.sealed"),
-        secret: stateSecret
-    )
-
-    let cloudTrigger = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
-    let now = Date().timeIntervalSince1970
-    let nextBoundary = (floor(now / 300) + 1) * 300
-    cloudTrigger.schedule(deadline: .now() + (nextBoundary - now), repeating: 300)
-    cloudTrigger.setEventHandler {
-        guard (try? history.needsCloudTrigger()) == true else { return }
-        let check = Process()
-        check.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
-        check.arguments = ["-x", "Safari"]
-        try? check.run()
-        check.waitUntilExit()
-        guard check.terminationStatus != 0 else { return }
-        let launch = Process()
-        launch.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        launch.arguments = ["-gj", "-a", "Safari"]
-        try? launch.run()
-    }
-    cloudTrigger.resume()
-
     unlink(socketPath)
     let server = socket(AF_UNIX, SOCK_STREAM, 0)
     guard server >= 0 else { throw IPCError.socket("socket") }
@@ -68,10 +221,18 @@ do {
     chmod(socketPath, 0o600)
     guard listen(server, 16) == 0 else { throw IPCError.socket("listen") }
 
+    let runtime = AgentRuntime(
+        runtimeDirectory: runtimeDirectory,
+        historyURL: historyURL,
+        agentBuild: agentBuild
+    )
+    DispatchQueue.global(qos: .userInitiated).async { runtime.initialize() }
+
     var seenNonces = Set<String>()
     while true {
         let client = accept(server, nil, nil)
         if client < 0 { continue }
+        configureSocketTimeouts(descriptor: client)
         autoreleasepool {
             defer { Darwin.close(client) }
             do {
@@ -86,14 +247,14 @@ do {
                 if seenNonces.count > 4_096 { seenNonces.removeAll(keepingCapacity: true) }
                 let response: Data
                 if request.role == "bridge" {
-                    response = try service.browserExchange(request.body)
+                    response = try runtime.browserExchange(request.body)
                 } else {
                     let command = try JSONDecoder().decode(MenuCommand.self, from: request.body)
                     if command.operation == "status" {
-                        response = try JSONEncoder().encode(service.status())
+                        response = try JSONEncoder().encode(runtime.health())
                     } else if command.operation == "selectProfile", let profileID = command.profileID {
                         response = try JSONEncoder().encode(ProfileSwitchStatus(
-                            state: service.selectProfile(profileID),
+                            state: runtime.selectProfile(profileID),
                             profileID: profileID
                         ))
                     } else {

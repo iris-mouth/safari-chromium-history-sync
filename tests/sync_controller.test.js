@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { createSyncController } from "../extension/sync_controller.js";
 import { createChromeGenerationStore } from "../extension/chrome_generation_store.js";
+import { isReceipt } from "../extension/protocol.js";
 
 function memoryStore(initial = {}) {
   let value = structuredClone(initial);
@@ -11,6 +12,12 @@ function memoryStore(initial = {}) {
     async replace(next) { value = structuredClone(next); },
   };
 }
+
+test("profile-switch errors are not mistaken for durable receipts", () => {
+  assert.equal(isReceipt({ type: "receipt", status: "ACKNOWLEDGED" }, "ACKNOWLEDGED"), true);
+  assert.equal(isReceipt({ type: "error", code: "PROFILE_NOT_ACTIVE" }, "ACKNOWLEDGED"), false);
+  assert.equal(isReceipt(undefined, "RECOVERY_RECORDED"), false);
+});
 
 test("browserExchange rejects a message from another protocol version", async () => {
   const sync = createSyncController({ store: memoryStore() });
@@ -28,19 +35,11 @@ test("browserExchange rejects a message from another protocol version", async ()
   });
 });
 
-test("selectProfile establishes exactly one active profile", async () => {
+test("status contains queue health without local profile-switch state", async () => {
   const sync = createSyncController({ store: memoryStore() });
 
-  assert.deepEqual(await sync.selectProfile("edge:Default"), {
-    state: "ACTIVE",
-    activeProfileId: "edge:Default",
-  });
   assert.deepEqual(await sync.status(), {
     protocolVersion: 1,
-    enabled: false,
-    activeProfileId: "edge:Default",
-    stagingProfileId: null,
-    switchState: "STABLE",
     pendingBrowserToSafari: 0,
     pendingSafariToBrowser: 0,
     recoveryCount: 0,
@@ -48,33 +47,23 @@ test("selectProfile establishes exactly one active profile", async () => {
   });
 });
 
-test("switching profiles freezes the old profile before activating the new one", async () => {
+test("freeze acknowledgements are no longer part of the browser protocol", async () => {
   const sync = createSyncController({ store: memoryStore() });
-  await sync.selectProfile("edge:Default");
-
-  assert.deepEqual(await sync.selectProfile("chrome:Profile 1"), {
-    state: "AWAITING_FREEZE_ACK",
-    activeProfileId: "edge:Default",
-    stagingProfileId: "chrome:Profile 1",
-  });
-  assert.equal((await sync.status()).switchState, "AWAITING_FREEZE_ACK");
 
   assert.deepEqual(await sync.browserExchange({
     version: 1,
     operation: "freezeAck",
     profileId: "edge:Default",
   }), {
-    type: "receipt",
-    status: "PROFILE_ACTIVATED",
-    activeProfileId: "chrome:Profile 1",
+    type: "error",
+    code: "INVALID_OPERATION",
+    retryable: false,
   });
-  assert.equal((await sync.status()).activeProfileId, "chrome:Profile 1");
 });
 
 test("browserExchange assigns durable increasing sequence numbers", async () => {
   const store = memoryStore();
   let sync = createSyncController({ store });
-  await sync.selectProfile("edge:Default");
 
   const first = await sync.browserExchange({
     version: 1,
@@ -97,7 +86,6 @@ test("browserExchange assigns durable increasing sequence numbers", async () => 
 test("browserExchange rejects an invalid page without accepting its valid prefix", async () => {
   const store = memoryStore();
   const sync = createSyncController({ store });
-  await sync.selectProfile("edge:Default");
 
   assert.equal((await sync.browserExchange({
     version: 1,
@@ -120,7 +108,6 @@ test("browserExchange rejects an invalid page without accepting its valid prefix
 
 test("browserExchange deduplicates a retried source event", async () => {
   const sync = createSyncController({ store: memoryStore() });
-  await sync.selectProfile("chrome:Default");
   const message = {
     version: 1,
     operation: "publish",
@@ -142,7 +129,12 @@ test("status survives a controller restart through immutable Chrome generations"
   };
   const store = createChromeGenerationStore(chromeStorage);
   let sync = createSyncController({ store });
-  await sync.selectProfile("edge:Persistent");
+  await sync.browserExchange({
+    version: 1,
+    operation: "publish",
+    profileId: "edge:Persistent",
+    events: [{ eventId: "durable", url: "https://example.com/durable" }],
+  });
   const firstGeneration = structuredClone(values.sync_state_generation_1);
 
   sync = createSyncController({ store });
@@ -150,17 +142,16 @@ test("status survives a controller restart through immutable Chrome generations"
     version: 1,
     operation: "publish",
     profileId: "edge:Persistent",
-    events: [{ eventId: "durable", url: "https://example.com/durable" }],
+    events: [{ eventId: "durable-2", url: "https://example.com/still-durable" }],
   });
 
-  assert.equal((await sync.status()).pendingBrowserToSafari, 1);
+  assert.equal((await sync.status()).pendingBrowserToSafari, 2);
   assert.deepEqual(values.sync_state_generation_1, firstGeneration);
   assert.equal(values.sync_state_head, 2);
 });
 
 test("browser-to-Safari pages remain pending until a cumulative receipt", async () => {
   const sync = createSyncController({ store: memoryStore() });
-  await sync.selectProfile("chrome:Default");
   await sync.browserExchange({
     version: 1,
     operation: "publish",
@@ -191,7 +182,6 @@ test("browser-to-Safari pages remain pending until a cumulative receipt", async 
 
 test("a resolver replay with a new random event ID does not duplicate a browser visit", async () => {
   const sync = createSyncController({ store: memoryStore() });
-  await sync.selectProfile("edge:Default");
   const base = {
     version: 1,
     operation: "publish",
@@ -210,4 +200,108 @@ test("a resolver replay with a new random event ID does not duplicate a browser 
 
   assert.equal(replay.accepted.length, 0);
   assert.equal((await sync.status()).pendingBrowserToSafari, 1);
+});
+
+test("queues and receipts are isolated by profile", async () => {
+  const sync = createSyncController({ store: memoryStore() });
+  await sync.browserExchange({
+    version: 1,
+    operation: "publish",
+    profileId: "edge:Default",
+    events: [{ eventId: "edge-event", url: "https://example.com/edge" }],
+  });
+  await sync.browserExchange({
+    version: 1,
+    operation: "publish",
+    profileId: "chrome:Default",
+    events: [{ eventId: "chrome-event", url: "https://example.com/chrome" }],
+  });
+
+  const chromePage = await sync.browserExchange({
+    version: 1,
+    operation: "pull",
+    stream: "browserToSafari",
+    profileId: "chrome:Default",
+  });
+  assert.deepEqual(chromePage.events.map((event) => event.eventId), ["chrome-event"]);
+
+  await sync.browserExchange({
+    version: 1,
+    operation: "ack",
+    stream: "browserToSafari",
+    profileId: "chrome:Default",
+    throughSequence: chromePage.events[0].sequence,
+  });
+
+  const edgePage = await sync.browserExchange({
+    version: 1,
+    operation: "pull",
+    stream: "browserToSafari",
+    profileId: "edge:Default",
+  });
+  assert.deepEqual(edgePage.events.map((event) => event.eventId), ["edge-event"]);
+  assert.equal((await sync.status()).pendingBrowserToSafari, 1);
+});
+
+test("deduplication keys are isolated by profile", async () => {
+  const sync = createSyncController({ store: memoryStore() });
+  const event = {
+    eventId: "same-event",
+    sourceKey: "https://example.com\n42",
+    url: "https://example.com",
+  };
+
+  const edge = await sync.browserExchange({
+    version: 1,
+    operation: "publish",
+    profileId: "edge:Default",
+    events: [event],
+  });
+  const chrome = await sync.browserExchange({
+    version: 1,
+    operation: "publish",
+    profileId: "chrome:Default",
+    events: [event],
+  });
+
+  assert.equal(edge.accepted.length, 1);
+  assert.equal(chrome.accepted.length, 1);
+});
+
+test("version 1 state migrates queues without retaining switch state", async () => {
+  const sync = createSyncController({ store: memoryStore({
+    schemaVersion: 1,
+    generation: 3,
+    activeProfileId: "edge:Legacy",
+    stagingProfileId: "chrome:Ignored",
+    switchState: "AWAITING_FREEZE_ACK",
+    nextBrowserToSafariSequence: 2,
+    nextSafariToBrowserSequence: 1,
+    browserToSafari: [{
+      sequence: 1,
+      eventId: "legacy-event",
+      url: "https://example.com/legacy",
+      acked: false,
+    }],
+    safariToBrowser: [],
+    seenBrowserEventIds: ["legacy-event"],
+    seenBrowserSourceKeys: [],
+    recoveryCount: 0,
+    unrecoverableCount: 0,
+  }) });
+
+  const page = await sync.browserExchange({
+    version: 1,
+    operation: "pull",
+    stream: "browserToSafari",
+    profileId: "edge:Legacy",
+  });
+  assert.deepEqual(page.events.map((event) => event.eventId), ["legacy-event"]);
+  assert.deepEqual(await sync.status(), {
+    protocolVersion: 1,
+    pendingBrowserToSafari: 1,
+    pendingSafariToBrowser: 0,
+    recoveryCount: 0,
+    unrecoverableCount: 0,
+  });
 });

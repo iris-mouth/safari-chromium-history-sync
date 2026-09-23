@@ -10,24 +10,22 @@ assignees: ""
 
 Where did setup stop?
 
-- Loading unpacked extension:
-- Finding extension ID:
-- Running `./setup.sh`:
-- Reloading extension:
-- Native host connection:
+- Selecting Chrome, Edge, or both:
+- Loading the revealed unpacked extension folder:
+- Approving Open at Login:
+- Granting Full Disk Access to `SafariSyncAgent.app`:
+- Detecting or selecting a connected profile:
 
 ## Environment
 
 - macOS version:
+- Safari version:
 - Browser:
-- Extension ID length is 32 characters: yes/no
+- Safari Chromium History Sync version:
+- Browser selected in Setup & Diagnostics: yes/no
 
-## Doctor Output
+## Setup & Diagnostics
 
-Run:
-
-```sh
-./doctor.sh
-```
-
-Paste the output after removing private paths if needed.
+Open **Setup & Diagnostics** from the menu app and describe the exact status or
+message shown. Do not attach private URLs, sealed state, browser profiles, or
+Safari database files.

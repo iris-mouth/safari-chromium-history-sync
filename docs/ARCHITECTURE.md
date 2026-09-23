@@ -14,8 +14,9 @@ The deep modules are:
 
 1. **Browser StateCoordinator** — a single-writer promise chain over immutable copy-on-write generations in `chrome.storage.local`.
 2. **Safari history adapter** — exact-schema validation, arrival cursors, crash reconciliation, and `BEGIN IMMEDIATE` inserts.
-3. **Agent service** — active-profile FSM, Safari arrival stream, encrypted outbox, and recovery ledger.
+3. **Agent service** — atomic active-profile selection, Safari arrival stream, profile-scoped encrypted outbox, and recovery ledger.
 4. **Local IPC adapter** — Native Messaging framing at the browser boundary and authenticated Unix-socket framing at the FDA boundary.
+5. **Setup coordinator** — browser opt-in, product-owned Native Messaging manifests, login-item state, Agent launch, and focused diagnostics; it runs in the no-FDA Menu process.
 
 ## Processes and trust
 
@@ -36,7 +37,9 @@ SafariSyncMenu — no FDA ── authenticated menu role ──┘
 
 The Menu app is the registered login item. On launch it starts the sibling Agent app; keeping the Agent as a top-level bundle ensures macOS TCC attributes Safari database access to the Agent identifier rather than to the outer Menu app.
 
-The Bridge cannot read Safari data. The Menu cannot use browser transport. The Agent accepts only `bridge` and `menu` roles with valid HMACs and rejects replayed nonces. The HMAC key is stored in an owner-only mode-`0600` file so separately signed local-development executables do not trigger Keychain authorization prompts. Only the Agent reads the Keychain root secret used for the AES-GCM sealed state document. Delivery idempotency is kept in a separate Agent-owned SQLite ledger rather than adding tables to Safari's database.
+The Bridge cannot open Safari's database directly, but it relays bounded Safari history pages to the selected Extension. The Menu cannot use browser transport. The Agent accepts only `bridge` and `menu` roles with valid HMACs and rejects replayed nonces. The HMAC key is stored in an owner-only mode-`0600` file so separately signed local-development executables do not trigger Keychain authorization prompts. This authenticates messages against accidental or cross-user callers, not against arbitrary code already executing as the current user, which can read the key. Only the Agent reads the Keychain root secret used for the AES-GCM sealed state document. Delivery idempotency is kept in a separate Agent-owned SQLite ledger rather than adding tables to Safari's database.
+
+The threat boundary assumes the current macOS account is not already compromised. The system does defend the FDA boundary, validates untrusted browser input, separates profiles, and fails closed before unknown Safari layouts are written. It deliberately does not add XPC identity infrastructure or privileged installer helpers. The Extension's fixed manifest key stabilizes the unpacked extension ID for `allowed_origins`; it is identification, not code-signing or a trust guarantee.
 
 ## Streams
 
@@ -73,8 +76,16 @@ When `current_generation > last_synced_generation`, a timer aligned to UTC five-
 
 ## Profile switching
 
-The Agent persists exactly one `ACTIVE` profile and at most one `STAGING` profile. Selecting a different profile enters `AWAITING_FREEZE_ACK`. The old extension first drains browser-to-Safari work, then receives `FREEZE_REQUIRED` on its pull and sends `freezeAck`. Only then is STAGING promoted. A staging or unrelated profile receives a typed retryable error.
+The Agent persists exactly one active profile. Selecting another connected profile changes that value atomically; there is no staging profile or freeze handshake. Browser outbox, Agent recovery entries, and delivery progress remain keyed by their originating profile. Pending work is not transferred during a switch and resumes only if that profile becomes active again. The global Safari arrival cursor continues from its current point, so newly observed Safari visits belong to the profile active when they are discovered.
+
+The Agent learns candidate profile IDs from ordinary authenticated Extension traffic before touching Safari data. A single connected candidate is selected automatically when no active profile exists; multiple candidates require a Menu choice. Candidate presence is ephemeral and rebuilt after Agent restart, while the active profile remains in sealed state.
+
+## Setup and distribution
+
+The Menu app owns setup because it does not have Full Disk Access and needs no new Agent repair commands. The user explicitly selects Chrome Stable, Edge Stable, or both. The coordinator creates or repairs a Native Messaging manifest only for selected browsers and removes only product-owned matching manifests when a browser is deselected. It never creates a Native Messaging directory for an unselected browser.
+
+The Extension is bundled as an unpacked-development artifact inside the Menu app. Setup opens the selected browser's extensions page and reveals that folder; browser approval and macOS privacy approval remain user actions. The signed, notarized PKG is payload-only and installs the Menu and Agent as sibling app bundles under `/Applications`. User-specific manifests and login-item state are created on first launch, never by privileged installer scripts.
 
 ## Migration and rollback
 
-Version 6 must not run concurrently with the legacy Python writer. Installation order is: build and verify the app, pair extensions, stop the old writer, remove old manifests, establish current-point baselines, then enable the Agent. Rollback disables the Agent and removes only `com.local.safari_history_sync` manifests; it does not rewrite Safari history.
+Version 6 must not run concurrently with the legacy Python writer. Setup detects the legacy host or writer and blocks synchronization until the user removes it; it does not silently delete legacy state. Rollback is an explicit operator procedure: quit the Menu app, stop the Agent, disable the Menu app under Open at Login, remove only product-owned `com.local.safari_history_sync` manifests, then install the prior version. It does not rewrite Safari history or silently remove encrypted pending data.

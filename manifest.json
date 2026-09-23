@@ -4,6 +4,7 @@
   "short_name": "History Sync",
   "version": "6.0",
   "description": "Bidirectional local history sync between Safari and one active Chrome or Edge profile on macOS.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAte34vHHI69jqc2pXPTmjabfALIOsGU6vyMKuvYwezCq2bebP82ImXqqqkW4894jKSMuJn1CmzjDH5do6B196J21kJCPL+9dhyBSYv+g7H+Dd0hDf8/9y8iuesIpczepwCEkf0SiQpUzsPaa7zgM1tfmjbPK4tiVcDlqayR7VgnFsT23ABSujDBqHpzEeRIxykgIULlBI7kuaV+o36gXB57lLxHp9bpHsaRpjKDahERS8RpEA36OR/X7hhlrr80LYwbDTi8tT9yNNiuIPcJ4exI9jKlyaIyag8K75HIYwC3foUbXs1ADvSUJdpn212qA7OLmshkjDgGy2O1NBkKqITQIDAQAB",
   "homepage_url": "https://github.com/iris-mouth/safari-chromium-history-sync",
   "author": "Bryce Cole and contributors",
   "permissions": [
@@ -15,9 +16,5 @@
   "background": {
     "service_worker": "service_worker.js",
     "type": "module"
-  },
-  "action": {
-    "default_title": "Safari Chromium History Sync",
-    "default_popup": "popup.html"
   }
 }

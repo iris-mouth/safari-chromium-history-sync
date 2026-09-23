@@ -31,16 +31,45 @@ public struct BrowserMessage: Codable, Sendable {
     public let stream: String?
     public let eventID: String?
     public let outcome: String?
+    public let browserFamily: String?
+    public let extensionVersion: String?
 
     enum CodingKeys: String, CodingKey {
-        case version, operation, events, limit, stream, outcome
+        case version, operation, events, limit, stream, outcome, browserFamily, extensionVersion
         case eventID = "eventId"
         case profileID = "profileId"
         case afterSequence, throughSequence
     }
 }
 
-public struct TypedError: Codable, Error, Equatable, Sendable {
+public struct BrowserProfileDescriptor: Codable, Equatable, Sendable {
+    public let profileID: String
+    public let browserFamily: String
+    public let extensionVersion: String?
+    public let lastSeen: Date
+    public let active: Bool
+
+    public init(
+        profileID: String,
+        browserFamily: String,
+        extensionVersion: String?,
+        lastSeen: Date,
+        active: Bool
+    ) {
+        self.profileID = profileID
+        self.browserFamily = browserFamily
+        self.extensionVersion = extensionVersion
+        self.lastSeen = lastSeen
+        self.active = active
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case browserFamily, extensionVersion, lastSeen, active
+        case profileID = "profileId"
+    }
+}
+
+public struct TypedError: Codable, Error, Equatable, Sendable, LocalizedError {
     public let type: String
     public let code: String
     public let retryable: Bool
@@ -50,25 +79,54 @@ public struct TypedError: Codable, Error, Equatable, Sendable {
         self.code = code
         self.retryable = retryable
     }
+
+    public var errorDescription: String? { code }
 }
 
 public struct HealthSnapshot: Codable, Equatable, Sendable {
     public let protocolVersion: Int
     public let enabled: Bool
     public let activeProfileID: String?
-    public let stagingProfileID: String?
-    public let switchState: String
+    public let runtimeState: String
+    public let issueCode: String?
+    public let agentBuild: String?
+    public let connectedProfiles: [BrowserProfileDescriptor]
     public let pendingBrowserToSafari: Int
     public let pendingSafariToBrowser: Int
     public let recoveryCount: Int
     public let unrecoverableCount: Int
 
     enum CodingKeys: String, CodingKey {
-        case protocolVersion, enabled, switchState
+        case protocolVersion, enabled, runtimeState, issueCode, agentBuild, connectedProfiles
         case activeProfileID = "activeProfileId"
-        case stagingProfileID = "stagingProfileId"
         case pendingBrowserToSafari, pendingSafariToBrowser
         case recoveryCount, unrecoverableCount
+    }
+
+    public init(
+        protocolVersion: Int = safariSyncProtocolVersion,
+        enabled: Bool,
+        activeProfileID: String?,
+        runtimeState: String,
+        issueCode: String? = nil,
+        agentBuild: String? = nil,
+        connectedProfiles: [BrowserProfileDescriptor] = [],
+        pendingBrowserToSafari: Int,
+        pendingSafariToBrowser: Int,
+        recoveryCount: Int,
+        unrecoverableCount: Int
+    ) {
+        self.protocolVersion = protocolVersion
+        self.enabled = enabled
+        self.activeProfileID = activeProfileID
+        self.runtimeState = runtimeState
+        self.issueCode = issueCode
+        self.agentBuild = agentBuild
+        self.connectedProfiles = connectedProfiles
+        self.pendingBrowserToSafari = pendingBrowserToSafari
+        self.pendingSafariToBrowser = pendingSafariToBrowser
+        self.recoveryCount = recoveryCount
+        self.unrecoverableCount = unrecoverableCount
     }
 }
 

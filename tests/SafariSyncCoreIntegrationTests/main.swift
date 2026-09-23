@@ -1,4 +1,6 @@
 import CSQLite
+import CryptoKit
+import Darwin
 import Foundation
 import SafariSyncCore
 
@@ -21,9 +23,19 @@ struct SafariSyncCoreIntegrationTests {
         try insertsOutboundVisitWithoutAcknowledgingICloud()
         try insertsDistinctOutboundVisits()
         try sourceEventIsIdempotent()
+        try observesProfilesWithoutActivatingThem()
+        try boundsObservedProfiles()
         try agentInterfacesPersistProfileAndExchangeState()
+        try recoveryOutcomeIsIdempotent()
+        try classifiesOnlySQLiteContentionAsTransient()
+        try migratesVersionOneAgentState()
+        try rejectsFutureAgentState()
         try keyLossReportsUnrecoverableWork()
         try ipcSecretRequiresOwnerOnlyRegularFile()
+        try partialIPCFrameTimesOut()
+        try slowIPCFrameHasTotalDeadline()
+        try detectsLegacyManifest()
+        try reconcilesOnlySelectedBrowserManifests()
         print("SafariSyncCoreIntegrationTests passed")
     }
 
@@ -120,16 +132,129 @@ struct SafariSyncCoreIntegrationTests {
 
         try expect(
             try service.selectProfile("chrome:Profile 1"),
-            "AWAITING_FREEZE_ACK",
+            "ACTIVE",
             "switch state"
         )
-        let freeze = try JSONSerialization.data(withJSONObject: [
+        try expect(try service.status().activeProfileID, "chrome:Profile 1", "switched profile")
+    }
+
+    static func observesProfilesWithoutActivatingThem() throws {
+        let fixture = try HistoryFixture()
+        let service = AgentService(
+            history: SafariHistoryStore(databaseURL: fixture.url, ledgerURL: fixture.ledgerURL),
+            stateURL: fixture.stateURL,
+            secret: Data(repeating: 5, count: 32)
+        )
+        let discovery = try JSONSerialization.data(withJSONObject: [
             "version": 1,
-            "operation": "freezeAck",
-            "profileId": "edge:Default",
+            "operation": "pull",
+            "stream": "safariToBrowser",
+            "profileId": "chrome:Candidate",
+            "browserFamily": "chrome",
+            "extensionVersion": "6.0",
+            "afterSequence": 0,
+            "limit": 128,
         ])
-        _ = try service.browserExchange(freeze)
-        try expect(try service.status().activeProfileID, "chrome:Profile 1", "promoted profile")
+        let response = try JSONSerialization.jsonObject(with: service.browserExchange(discovery)) as! [String: Any]
+        try expect(response["code"] as? String, "PROFILE_NOT_ACTIVE", "candidate remains inactive")
+        let status = try service.status()
+        try expect(status.activeProfileID, nil, "discovery does not select profile")
+        try expect(status.connectedProfiles.map(\.profileID), ["chrome:Candidate"], "candidate is visible")
+    }
+
+    static func recoveryOutcomeIsIdempotent() throws {
+        let fixture = try HistoryFixture()
+        let secret = Data(repeating: 13, count: 32)
+        let service = AgentService(
+            history: SafariHistoryStore(databaseURL: fixture.url, ledgerURL: fixture.ledgerURL),
+            stateURL: fixture.stateURL,
+            secret: secret
+        )
+        _ = try service.selectProfile("chrome:Default")
+        try fixture.insertSafariVisit(url: "https://example.com/recovery")
+        let pull = try JSONSerialization.data(withJSONObject: [
+            "version": 1,
+            "operation": "pull",
+            "stream": "safariToBrowser",
+            "profileId": "chrome:Default",
+            "afterSequence": 0,
+            "limit": 128,
+        ])
+        let page = try JSONSerialization.jsonObject(with: service.browserExchange(pull)) as! [String: Any]
+        let event = (page["events"] as! [[String: Any]]).first!
+        let outcome = try JSONSerialization.data(withJSONObject: [
+            "version": 1,
+            "operation": "outcome",
+            "profileId": "chrome:Default",
+            "eventId": event["eventId"] as! String,
+            "outcome": "FINALIZED_UNCONFIRMED",
+        ])
+        for attempt in 1...2 {
+            let response = try JSONSerialization.jsonObject(with: service.browserExchange(outcome)) as! [String: Any]
+            try expect(response["status"] as? String, "RECOVERY_RECORDED", "outcome replay \(attempt)")
+        }
+        try expect(try service.status().recoveryCount, 1, "single recovery record")
+
+        let key = SymmetricKey(data: SHA256.hash(data: secret + Data("agent-state-v1".utf8)))
+        let sealed = try AES.GCM.SealedBox(combined: Data(contentsOf: fixture.stateURL))
+        var stored = try JSONSerialization.jsonObject(with: AES.GCM.open(sealed, using: key)) as! [String: Any]
+        var recovery = stored["recovery"] as! [[String: Any]]
+        recovery[0]["nextRetryAt"] = -1_000_000
+        stored["recovery"] = recovery
+        let updated = try JSONSerialization.data(withJSONObject: stored)
+        try AES.GCM.seal(updated, using: key).combined!.write(to: fixture.stateURL)
+
+        let retryPage = try JSONSerialization.jsonObject(with: service.browserExchange(pull)) as! [String: Any]
+        try expect((retryPage["events"] as? [[String: Any]])?.count, 1, "scheduled recovery retry")
+        let retryResponse = try JSONSerialization.jsonObject(with: service.browserExchange(outcome)) as! [String: Any]
+        try expect(retryResponse["status"] as? String, "RECOVERY_RECORDED", "retry failure recorded")
+        try expect(try service.status().pendingSafariToBrowser, 0, "failed retry removed from outbox")
+        try expect(try service.status().recoveryCount, 1, "retry updates existing recovery")
+    }
+
+    static func classifiesOnlySQLiteContentionAsTransient() throws {
+        try expect(
+            SafariHistoryError.sqlite(code: SQLITE_BUSY, message: "busy").isTransientContention,
+            true,
+            "SQLite busy classification"
+        )
+        try expect(
+            SafariHistoryError.sqlite(code: SQLITE_CORRUPT, message: "corrupt").isTransientContention,
+            false,
+            "SQLite corruption classification"
+        )
+    }
+
+    static func boundsObservedProfiles() throws {
+        let fixture = try HistoryFixture()
+        let service = AgentService(
+            history: SafariHistoryStore(databaseURL: fixture.url, ledgerURL: fixture.ledgerURL),
+            stateURL: fixture.stateURL,
+            secret: Data(repeating: 6, count: 32)
+        )
+        for index in 0..<33 {
+            let message = try JSONSerialization.data(withJSONObject: [
+                "version": 1,
+                "operation": "pull",
+                "stream": "safariToBrowser",
+                "profileId": "chrome:candidate-\(index)",
+                "afterSequence": 0,
+                "limit": 128,
+            ])
+            _ = try service.browserExchange(message)
+        }
+        try expect(try service.status().connectedProfiles.count, 32, "candidate profile cap")
+
+        let oversized = try JSONSerialization.data(withJSONObject: [
+            "version": 1,
+            "operation": "pull",
+            "stream": "safariToBrowser",
+            "profileId": String(repeating: "x", count: 129),
+            "afterSequence": 0,
+            "limit": 128,
+        ])
+        let response = try JSONSerialization.jsonObject(with: service.browserExchange(oversized)) as! [String: Any]
+        try expect(response["code"] as? String, "INVALID_MESSAGE", "oversized profile ID")
     }
 
     static func keyLossReportsUnrecoverableWork() throws {
@@ -158,8 +283,61 @@ struct SafariSyncCoreIntegrationTests {
             secret: Data(repeating: 9, count: 32)
         )
         let status = try serviceWithLostKey.status()
-        try expect(status.switchState, "KEY_UNAVAILABLE", "key loss status")
+        try expect(status.issueCode, "stateUnreadable", "key loss status")
         try expect(status.unrecoverableCount, 1, "key loss unresolved count")
+    }
+
+    static func migratesVersionOneAgentState() throws {
+        let fixture = try HistoryFixture()
+        let secret = Data(repeating: 11, count: 32)
+        let legacy: [String: Any] = [
+            "enabled": true,
+            "activeProfileID": "edge:Existing",
+            "stagingProfileID": "chrome:Discarded",
+            "switchState": "AWAITING_FREEZE_ACK",
+            "nextSafariSequence": 1,
+            "outbox": [],
+            "deliveredSafariVisitIDs": [],
+            "recovery": [],
+            "unrecoverableCount": 0,
+        ]
+        let plaintext = try JSONSerialization.data(withJSONObject: legacy)
+        let key = SymmetricKey(data: SHA256.hash(data: secret + Data("agent-state-v1".utf8)))
+        let sealed = try AES.GCM.seal(plaintext, using: key).combined!
+        try sealed.write(to: fixture.stateURL)
+
+        let service = AgentService(
+            history: SafariHistoryStore(databaseURL: fixture.url, ledgerURL: fixture.ledgerURL),
+            stateURL: fixture.stateURL,
+            secret: secret
+        )
+        try expect(try service.status().activeProfileID, "edge:Existing", "v1 active profile")
+        _ = try service.selectProfile("edge:Existing")
+        let migratedBox = try AES.GCM.SealedBox(combined: Data(contentsOf: fixture.stateURL))
+        let migrated = try JSONSerialization.jsonObject(with: AES.GCM.open(migratedBox, using: key)) as! [String: Any]
+        try expect(migrated["schemaVersion"] as? Int, 2, "migrated schema version")
+        try expect(migrated["stagingProfileID"] as? String, nil, "staging state removed")
+    }
+
+    static func rejectsFutureAgentState() throws {
+        let fixture = try HistoryFixture()
+        let secret = Data(repeating: 12, count: 32)
+        let future = try JSONSerialization.data(withJSONObject: [
+            "schemaVersion": 3,
+            "enabled": true,
+            "activeProfileID": "chrome:Future",
+        ])
+        let key = SymmetricKey(data: SHA256.hash(data: secret + Data("agent-state-v1".utf8)))
+        let sealed = try AES.GCM.seal(future, using: key).combined!
+        try sealed.write(to: fixture.stateURL)
+        let original = try Data(contentsOf: fixture.stateURL)
+        let service = AgentService(
+            history: SafariHistoryStore(databaseURL: fixture.url, ledgerURL: fixture.ledgerURL),
+            stateURL: fixture.stateURL,
+            secret: secret
+        )
+        try expect(try service.status().issueCode, "stateUnreadable", "future schema is rejected")
+        try expect(try Data(contentsOf: fixture.stateURL), original, "future state is not rewritten")
     }
 
     static func ipcSecretRequiresOwnerOnlyRegularFile() throws {
@@ -181,6 +359,124 @@ struct SafariSyncCoreIntegrationTests {
         } catch {
             // Expected: the Bridge and Menu must fail closed instead of reading a broad file.
         }
+    }
+
+    static func partialIPCFrameTimesOut() throws {
+        var descriptors = [Int32](repeating: -1, count: 2)
+        guard socketpair(AF_UNIX, SOCK_STREAM, 0, &descriptors) == 0 else {
+            throw IntegrationFailure.assertion("socketpair failed")
+        }
+        defer {
+            Darwin.close(descriptors[0])
+            Darwin.close(descriptors[1])
+        }
+        configureSocketTimeouts(descriptor: descriptors[0], seconds: 1)
+        var byte: UInt8 = 1
+        _ = Darwin.write(descriptors[1], &byte, 1)
+        let started = Date()
+        do {
+            _ = try readFrame(descriptor: descriptors[0], timeoutSeconds: 1)
+            throw IntegrationFailure.assertion("partial frame was accepted")
+        } catch let failure as IntegrationFailure {
+            throw failure
+        } catch {
+            try expect(Date().timeIntervalSince(started) < 2.0, true, "partial frame timeout")
+        }
+    }
+
+    static func slowIPCFrameHasTotalDeadline() throws {
+        var descriptors = [Int32](repeating: -1, count: 2)
+        guard socketpair(AF_UNIX, SOCK_STREAM, 0, &descriptors) == 0 else {
+            throw IntegrationFailure.assertion("socketpair failed")
+        }
+        defer {
+            Darwin.close(descriptors[0])
+            Darwin.close(descriptors[1])
+        }
+        let bytes: [UInt8] = [8, 0, 0, 0] + Array(repeating: 1, count: 8)
+        let writerDescriptor = descriptors[1]
+        let group = DispatchGroup()
+        group.enter()
+        DispatchQueue.global().async {
+            for byte in bytes {
+                usleep(200_000)
+                var value = byte
+                _ = Darwin.send(writerDescriptor, &value, 1, Int32(MSG_NOSIGNAL))
+            }
+            group.leave()
+        }
+        let started = Date()
+        do {
+            _ = try readFrame(descriptor: descriptors[0], timeoutSeconds: 1)
+            throw IntegrationFailure.assertion("slow frame bypassed total deadline")
+        } catch let failure as IntegrationFailure {
+            throw failure
+        } catch {
+            try expect(Date().timeIntervalSince(started) < 1.5, true, "total frame deadline")
+        }
+        group.wait()
+    }
+
+    static func detectsLegacyManifest() throws {
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("safari-sync-legacy-\(UUID().uuidString)")
+        let directory = home.appendingPathComponent(
+            "Library/Application Support/Google/Chrome/NativeMessagingHosts"
+        )
+        defer { try? FileManager.default.removeItem(at: home) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let manifest = directory.appendingPathComponent("\(LegacyWriterDetector.hostName).json")
+        try Data("{}".utf8).write(to: manifest)
+        try expect(
+            LegacyWriterDetector.detect(home: home).contains(manifest.path),
+            true,
+            "legacy manifest detection"
+        )
+    }
+
+    static func reconcilesOnlySelectedBrowserManifests() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("safari-sync-manifests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let chrome = NativeMessagingTarget(
+            id: "chrome",
+            directory: root.appendingPathComponent("chrome")
+        )
+        let edge = NativeMessagingTarget(
+            id: "edge",
+            directory: root.appendingPathComponent("edge")
+        )
+        let hostName = "com.local.safari_history_sync"
+        let bridgeURL = URL(fileURLWithPath: "/Applications/Safari Chromium History Sync.app/Contents/MacOS/SafariSyncBridge")
+        let bridgeSuffix = "/Safari Chromium History Sync.app/Contents/MacOS/SafariSyncBridge"
+
+        try NativeMessagingManifestStore.reconcile(
+            targets: [chrome, edge],
+            selectedTargetIDs: [chrome.id],
+            hostName: hostName,
+            bridgeURL: bridgeURL,
+            extensionID: "abcdefghijklmnopabcdefghijklmnop",
+            bridgeSuffix: bridgeSuffix
+        )
+        let chromeManifest = chrome.directory.appendingPathComponent("\(hostName).json")
+        let edgeManifest = edge.directory.appendingPathComponent("\(hostName).json")
+        try expect(FileManager.default.fileExists(atPath: chromeManifest.path), true, "selected browser manifest")
+        try expect(FileManager.default.fileExists(atPath: edge.directory.path), false, "unselected browser directory")
+        let attributes = try FileManager.default.attributesOfItem(atPath: chromeManifest.path)
+        try expect(attributes[.posixPermissions] as? NSNumber, NSNumber(value: 0o600), "manifest mode")
+
+        try FileManager.default.createDirectory(at: edge.directory, withIntermediateDirectories: true)
+        try Data("{\"name\":\"someone.else\",\"path\":\"/tmp/foreign\"}".utf8).write(to: edgeManifest)
+        try NativeMessagingManifestStore.reconcile(
+            targets: [chrome, edge],
+            selectedTargetIDs: [],
+            hostName: hostName,
+            bridgeURL: bridgeURL,
+            extensionID: "abcdefghijklmnopabcdefghijklmnop",
+            bridgeSuffix: bridgeSuffix
+        )
+        try expect(FileManager.default.fileExists(atPath: chromeManifest.path), false, "owned manifest removal")
+        try expect(FileManager.default.fileExists(atPath: edgeManifest.path), true, "foreign manifest preservation")
     }
 }
 

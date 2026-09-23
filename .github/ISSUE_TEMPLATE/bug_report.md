@@ -16,26 +16,14 @@ Describe the sync behavior you expected and what happened instead.
 - Safari version:
 - Chromium browser and version:
 - Safari Sync version:
-- Sync direction:
+- Active profile label shown in the menu:
 
 ## Diagnostics
 
-Run:
-
-```sh
-./doctor.sh
-```
-
-Paste the output after removing private paths if needed.
-
-## Scope
-
-- Bookmarks:
-- Reading List:
-- History:
-- Open tabs:
-- Tab groups:
+Open **Setup & Diagnostics** and include the exact status or message shown.
+State whether the pending or recovery counts are nonzero. Do not include URLs.
 
 ## Notes
 
-Do not attach `state.json`, `sync.log`, Safari backups, or browser profile files unless they have been scrubbed.
+Do not attach `state.sealed`, delivery ledgers, Safari databases, browser profile
+files, or screenshots containing private URLs.

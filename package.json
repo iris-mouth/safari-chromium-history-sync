@@ -22,8 +22,7 @@
   ],
   "scripts": {
     "check": "./scripts/check.sh",
-    "test": "node --test tests/*.test.js",
-    "doctor": "./doctor.sh"
+    "test": "node --test tests/*.test.js"
   },
   "type": "module"
 }

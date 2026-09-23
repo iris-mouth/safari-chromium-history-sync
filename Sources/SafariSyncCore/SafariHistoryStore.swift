@@ -31,6 +31,15 @@ public enum SafariHistoryError: Error, Equatable {
     case incompatibleSchema(String)
     case sqlite(code: Int32, message: String)
     case invalidURL
+
+    public var isTransientContention: Bool {
+        switch self {
+        case let .sqlite(code, _):
+            code == SQLITE_BUSY || code == SQLITE_LOCKED
+        default:
+            false
+        }
+    }
 }
 
 public final class SafariHistoryStore: @unchecked Sendable {

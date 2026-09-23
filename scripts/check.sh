@@ -18,7 +18,6 @@ node --check "$ROOT/extension/protocol.js"
 node --check "$ROOT/extension/sync_controller.js"
 node --check "$ROOT/extension/chrome_generation_store.js"
 node --check "$ROOT/extension/worker.js"
-node --check "$ROOT/popup.js"
 npm --prefix "$ROOT" test
 swift run --disable-sandbox --package-path "$ROOT" --scratch-path "$CHECK_TMP/build" SafariSyncCoreIntegrationTests
 

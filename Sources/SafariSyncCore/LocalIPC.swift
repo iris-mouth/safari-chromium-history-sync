@@ -7,6 +7,7 @@ public enum IPCError: Error {
     case socket(String)
     case invalidFrame
     case authenticationFailed
+    case unsafeDirectory
 }
 
 public struct AuthenticatedRequest: Codable, Sendable {
@@ -42,6 +43,14 @@ public enum IPCSecretStore {
                 withIntermediateDirectories: true,
                 attributes: [.posixPermissions: 0o700]
             )
+            var directoryMetadata = stat()
+            let directoryPath = url.deletingLastPathComponent().path
+            guard lstat(directoryPath, &directoryMetadata) == 0,
+                  (directoryMetadata.st_mode & S_IFMT) == S_IFDIR,
+                  directoryMetadata.st_uid == getuid(),
+                  chmod(directoryPath, 0o700) == 0 else {
+                throw IPCError.unsafeDirectory
+            }
             let descriptor = open(url.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
             if descriptor >= 0 {
                 let secret = Data((0..<32).map { _ in UInt8.random(in: .min ... .max) })
@@ -56,6 +65,10 @@ public enum IPCSecretStore {
             } else if errno != EEXIST {
                 throw IPCError.socket("create IPC secret")
             }
+        }
+
+        guard privateDirectory(at: url.deletingLastPathComponent()) else {
+            throw IPCError.unsafeDirectory
         }
 
         var metadata = stat()
@@ -85,6 +98,7 @@ public struct LocalIPCClient {
         let descriptor = socket(AF_UNIX, SOCK_STREAM, 0)
         guard descriptor >= 0 else { throw IPCError.socket("socket") }
         defer { Darwin.close(descriptor) }
+        configureSocketTimeouts(descriptor: descriptor)
         var address = try unixAddress(path: socketPath)
         let connected = withUnsafePointer(to: &address) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
@@ -95,6 +109,22 @@ public struct LocalIPCClient {
         try writeFrame(payload, descriptor: descriptor)
         return try readFrame(descriptor: descriptor)
     }
+}
+
+public func configureSocketTimeouts(descriptor: Int32, seconds: Int = 2) {
+    var timeout = timeval(tv_sec: seconds, tv_usec: 0)
+    withUnsafePointer(to: &timeout) { pointer in
+        _ = setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, pointer, socklen_t(MemoryLayout<timeval>.size))
+        _ = setsockopt(descriptor, SOL_SOCKET, SO_SNDTIMEO, pointer, socklen_t(MemoryLayout<timeval>.size))
+    }
+}
+
+private func privateDirectory(at url: URL) -> Bool {
+    var metadata = stat()
+    return lstat(url.path, &metadata) == 0
+        && (metadata.st_mode & S_IFMT) == S_IFDIR
+        && metadata.st_uid == getuid()
+        && (metadata.st_mode & 0o777) == 0o700
 }
 
 public func unixAddress(path: String) throws -> sockaddr_un {
@@ -113,44 +143,96 @@ public func unixAddress(path: String) throws -> sockaddr_un {
     return address
 }
 
-public func readFrame(descriptor: Int32, maximum: Int = 1_048_576) throws -> Data {
+public func readFrame(
+    descriptor: Int32,
+    maximum: Int = 1_048_576,
+    timeoutSeconds: Int = 2
+) throws -> Data {
+    let deadline = DispatchTime.now().uptimeNanoseconds
+        + UInt64(max(1, timeoutSeconds)) * 1_000_000_000
     var length: UInt32 = 0
-    guard readExactly(descriptor, into: &length, count: 4) else { throw IPCError.invalidFrame }
+    guard readExactly(descriptor, into: &length, count: 4, deadline: deadline) else {
+        throw IPCError.invalidFrame
+    }
     let size = Int(UInt32(littleEndian: length))
     guard size > 0, size <= maximum else { throw IPCError.invalidFrame }
     var data = Data(count: size)
     let ok = data.withUnsafeMutableBytes { buffer in
-        readExactly(descriptor, into: buffer.baseAddress!, count: size)
+        readExactly(descriptor, into: buffer.baseAddress!, count: size, deadline: deadline)
     }
     guard ok else { throw IPCError.invalidFrame }
     return data
 }
 
-public func writeFrame(_ data: Data, descriptor: Int32) throws {
+public func writeFrame(_ data: Data, descriptor: Int32, timeoutSeconds: Int = 2) throws {
+    let deadline = DispatchTime.now().uptimeNanoseconds
+        + UInt64(max(1, timeoutSeconds)) * 1_000_000_000
     var length = UInt32(data.count).littleEndian
-    guard writeExactly(descriptor, from: &length, count: 4) else { throw IPCError.socket("write") }
+    guard writeExactly(descriptor, from: &length, count: 4, deadline: deadline) else {
+        throw IPCError.socket("write")
+    }
     let ok = data.withUnsafeBytes { buffer in
-        writeExactly(descriptor, from: buffer.baseAddress!, count: data.count)
+        writeExactly(descriptor, from: buffer.baseAddress!, count: data.count, deadline: deadline)
     }
     guard ok else { throw IPCError.socket("write") }
 }
 
-private func readExactly(_ descriptor: Int32, into pointer: UnsafeMutableRawPointer, count: Int) -> Bool {
+private func readExactly(
+    _ descriptor: Int32,
+    into pointer: UnsafeMutableRawPointer,
+    count: Int,
+    deadline: UInt64
+) -> Bool {
     var offset = 0
     while offset < count {
-        let amount = Darwin.read(descriptor, pointer.advanced(by: offset), count - offset)
+        guard waitForSocket(descriptor, events: Int16(POLLIN), deadline: deadline) else { return false }
+        let amount = Darwin.recv(
+            descriptor,
+            pointer.advanced(by: offset),
+            count - offset,
+            Int32(MSG_DONTWAIT)
+        )
+        if amount < 0, errno == EINTR || errno == EAGAIN { continue }
         if amount <= 0 { return false }
         offset += amount
     }
     return true
 }
 
-private func writeExactly(_ descriptor: Int32, from pointer: UnsafeRawPointer, count: Int) -> Bool {
+private func writeExactly(
+    _ descriptor: Int32,
+    from pointer: UnsafeRawPointer,
+    count: Int,
+    deadline: UInt64
+) -> Bool {
     var offset = 0
     while offset < count {
-        let amount = Darwin.write(descriptor, pointer.advanced(by: offset), count - offset)
+        guard waitForSocket(descriptor, events: Int16(POLLOUT), deadline: deadline) else { return false }
+        let amount = Darwin.send(
+            descriptor,
+            pointer.advanced(by: offset),
+            count - offset,
+            Int32(MSG_DONTWAIT | MSG_NOSIGNAL)
+        )
+        if amount < 0, errno == EINTR || errno == EAGAIN { continue }
         if amount <= 0 { return false }
         offset += amount
     }
     return true
+}
+
+private func waitForSocket(_ descriptor: Int32, events: Int16, deadline: UInt64) -> Bool {
+    while true {
+        let now = DispatchTime.now().uptimeNanoseconds
+        guard now < deadline else { return false }
+        let milliseconds = max(1, min((deadline - now + 999_999) / 1_000_000, UInt64(Int32.max)))
+        var item = pollfd(fd: descriptor, events: events, revents: 0)
+        let result = Darwin.poll(&item, 1, Int32(milliseconds))
+        if result < 0, errno == EINTR { continue }
+        guard result > 0,
+              item.revents & (events | Int16(POLLERR) | Int16(POLLHUP) | Int16(POLLNVAL)) != 0 else {
+            return false
+        }
+        return item.revents & events != 0
+    }
 }

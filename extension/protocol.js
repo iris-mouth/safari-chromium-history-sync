@@ -1,7 +1,7 @@
 export const PROTOCOL_VERSION = 1;
 export const MAX_PAGE_EVENTS = 128;
 
-const OPERATIONS = new Set(["publish", "pull", "ack", "freezeAck", "outcome"]);
+const OPERATIONS = new Set(["publish", "pull", "ack", "outcome"]);
 
 export function typedError(code, retryable = false, details = undefined) {
   const error = { type: "error", code, retryable };
@@ -32,4 +32,8 @@ export function isWebUrl(value) {
   } catch {
     return false;
   }
+}
+
+export function isReceipt(response, status) {
+  return response?.type === "receipt" && response.status === status;
 }

@@ -18,27 +18,63 @@ public final class AgentService: @unchecked Sendable {
     }
 
     private struct State: Codable, Sendable {
+        var schemaVersion = 2
         var enabled = true
         var activeProfileID: String?
-        var stagingProfileID: String?
-        var switchState = "STABLE"
         var cursor: SafariArrivalCursor?
         var nextSafariSequence: Int64 = 1
         var outbox: [OutboxEvent] = []
         var deliveredSafariVisitIDs: Set<Int64> = []
         var recovery: [RecoveryEntry] = []
         var unrecoverableCount = 0
+
+        private enum CodingKeys: String, CodingKey {
+            case schemaVersion, enabled, activeProfileID, cursor, nextSafariSequence
+            case outbox, deliveredSafariVisitIDs, recovery, unrecoverableCount
+        }
+
+        init() {}
+
+        init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            let sourceVersion = try values.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1
+            guard sourceVersion == 1 || sourceVersion == 2 else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .schemaVersion,
+                    in: values,
+                    debugDescription: "unsupported Agent state schema \(sourceVersion)"
+                )
+            }
+            schemaVersion = 2
+            enabled = try values.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+            activeProfileID = try values.decodeIfPresent(String.self, forKey: .activeProfileID)
+            cursor = try values.decodeIfPresent(SafariArrivalCursor.self, forKey: .cursor)
+            nextSafariSequence = try values.decodeIfPresent(Int64.self, forKey: .nextSafariSequence) ?? 1
+            outbox = try values.decodeIfPresent([OutboxEvent].self, forKey: .outbox) ?? []
+            deliveredSafariVisitIDs = try values.decodeIfPresent(Set<Int64>.self, forKey: .deliveredSafariVisitIDs) ?? []
+            recovery = try values.decodeIfPresent([RecoveryEntry].self, forKey: .recovery) ?? []
+            unrecoverableCount = try values.decodeIfPresent(Int.self, forKey: .unrecoverableCount) ?? 0
+        }
+    }
+
+    private struct ObservedProfile: Sendable {
+        var browserFamily: String
+        var extensionVersion: String?
+        var lastSeen: Date
     }
 
     private let history: SafariHistoryStore
     private let persistence: EncryptedStateStore<State>
     private let authenticationKey: Data
+    private let agentBuild: String?
     private let lock = NSLock()
+    private var observedProfiles: [String: ObservedProfile] = [:]
 
-    public init(history: SafariHistoryStore, stateURL: URL, secret: Data) {
+    public init(history: SafariHistoryStore, stateURL: URL, secret: Data, agentBuild: String? = nil) {
         self.history = history
         self.persistence = EncryptedStateStore(url: stateURL, secret: secret)
         self.authenticationKey = secret
+        self.agentBuild = agentBuild
     }
 
     public func browserExchange(_ data: Data) throws -> Data {
@@ -52,38 +88,11 @@ public final class AgentService: @unchecked Sendable {
             return try encode(.failure(TypedError(code: "UNSUPPORTED_PROTOCOL")))
         }
         return try lock.withLock {
+            guard validCandidateMessage(message) else {
+                return try encode(.failure(TypedError(code: "INVALID_MESSAGE")))
+            }
+            observe(message)
             var state = try persistence.load() ?? State()
-            if state.activeProfileID == nil {
-                state.activeProfileID = message.profileID
-                if state.cursor == nil {
-                    state.cursor = try history.arrivalBaseline(authenticationKey: authenticationKey)
-                }
-            }
-
-            if message.operation == "freezeAck" {
-                guard message.profileID == state.activeProfileID,
-                      state.switchState == "AWAITING_FREEZE_ACK",
-                      !state.outbox.contains(where: { $0.profileID == message.profileID }),
-                      let staging = state.stagingProfileID else {
-                    return try encode(.failure(TypedError(code: "UNEXPECTED_FREEZE_ACK")))
-                }
-                state.activeProfileID = staging
-                state.stagingProfileID = nil
-                state.switchState = "STABLE"
-                try persist(state)
-                return try encode(.receipt(status: "PROFILE_ACTIVATED"))
-            }
-
-            if state.switchState == "AWAITING_FREEZE_ACK" {
-                if message.profileID != state.activeProfileID {
-                    return try encode(.failure(TypedError(code: "PROFILE_STAGING", retryable: true)))
-                }
-                if message.operation == "pull" && !state.outbox.contains(where: {
-                    $0.profileID == message.profileID
-                }) {
-                    return try encode(.failure(TypedError(code: "FREEZE_REQUIRED", retryable: true)))
-                }
-            }
 
             guard message.profileID == state.activeProfileID else {
                 return try encode(.failure(TypedError(code: "PROFILE_NOT_ACTIVE", retryable: true)))
@@ -129,9 +138,7 @@ public final class AgentService: @unchecked Sendable {
                         recoveryDelay(afterAttempt: retry.attempt)
                     )
                 }
-                if state.switchState == "STABLE" {
-                    try harvestSafariVisits(state: &state, profileID: message.profileID)
-                }
+                try harvestSafariVisits(state: &state, profileID: message.profileID)
                 let after = message.afterSequence ?? 0
                 let limit = max(1, min(message.limit ?? safariSyncMaximumPageSize, safariSyncMaximumPageSize))
                 let pending = state.outbox
@@ -164,6 +171,13 @@ public final class AgentService: @unchecked Sendable {
             case "outcome":
                 guard let eventID = message.eventID, let outcome = message.outcome else {
                     return try encode(.failure(TypedError(code: "INVALID_OUTCOME")))
+                }
+                if state.recovery.contains(where: {
+                    $0.profileID == message.profileID && $0.eventID == eventID
+                }) && !state.outbox.contains(where: {
+                    $0.profileID == message.profileID && $0.eventID == eventID
+                }) {
+                    return try encode(.receipt(status: "RECOVERY_RECORDED"))
                 }
                 guard let failed = state.outbox.first(where: {
                     $0.profileID == message.profileID && $0.eventID == eventID
@@ -199,23 +213,12 @@ public final class AgentService: @unchecked Sendable {
     public func selectProfile(_ profileID: String) throws -> String {
         try lock.withLock {
             var state = try persistence.load() ?? State()
-            if state.activeProfileID == nil || state.activeProfileID == profileID {
-                state.activeProfileID = profileID
-                state.stagingProfileID = nil
-                state.switchState = "STABLE"
-                if state.cursor == nil {
-                    state.cursor = try history.arrivalBaseline(authenticationKey: authenticationKey)
-                }
-                try persist(state)
-                return "ACTIVE"
+            state.activeProfileID = profileID
+            if state.cursor == nil {
+                state.cursor = try history.arrivalBaseline(authenticationKey: authenticationKey)
             }
-            if let current = state.activeProfileID {
-                try harvestSafariVisits(state: &state, profileID: current)
-            }
-            state.stagingProfileID = profileID
-            state.switchState = "AWAITING_FREEZE_ACK"
             try persist(state)
-            return state.switchState
+            return "ACTIVE"
         }
     }
 
@@ -226,11 +229,12 @@ public final class AgentService: @unchecked Sendable {
                 state = try persistence.load() ?? State()
             } catch {
                 return HealthSnapshot(
-                    protocolVersion: safariSyncProtocolVersion,
                     enabled: false,
                     activeProfileID: nil,
-                    stagingProfileID: nil,
-                    switchState: "KEY_UNAVAILABLE",
+                    runtimeState: "blocked",
+                    issueCode: "stateUnreadable",
+                    agentBuild: agentBuild,
+                    connectedProfiles: descriptors(activeProfileID: nil),
                     pendingBrowserToSafari: 0,
                     pendingSafariToBrowser: 0,
                     recoveryCount: 0,
@@ -238,11 +242,11 @@ public final class AgentService: @unchecked Sendable {
                 )
             }
             return HealthSnapshot(
-                protocolVersion: safariSyncProtocolVersion,
                 enabled: state.enabled,
                 activeProfileID: state.activeProfileID,
-                stagingProfileID: state.stagingProfileID,
-                switchState: state.switchState,
+                runtimeState: "ready",
+                agentBuild: agentBuild,
+                connectedProfiles: descriptors(activeProfileID: state.activeProfileID),
                 pendingBrowserToSafari: 0,
                 pendingSafariToBrowser: state.outbox.count,
                 recoveryCount: state.recovery.count,
@@ -258,6 +262,61 @@ public final class AgentService: @unchecked Sendable {
     private func persist(_ state: State) throws {
         try persistence.save(state)
         try persistence.saveLastKnownUnresolvedCount(state.outbox.count + state.recovery.count)
+    }
+
+    private func observe(_ message: BrowserMessage) {
+        let now = Date()
+        observedProfiles = observedProfiles.filter {
+            $0.value.lastSeen > now.addingTimeInterval(-10 * 60)
+        }
+        if observedProfiles[message.profileID] == nil, observedProfiles.count >= 32 { return }
+        let inferredFamily = message.profileID.split(separator: ":", maxSplits: 1).first.map(String.init)
+        observedProfiles[message.profileID] = ObservedProfile(
+            browserFamily: ["chrome", "edge"].contains(message.browserFamily ?? "")
+                ? message.browserFamily!
+                : inferredFamily ?? "chromium",
+            extensionVersion: message.extensionVersion,
+            lastSeen: now
+        )
+    }
+
+    private func validCandidateMessage(_ message: BrowserMessage) -> Bool {
+        guard !message.profileID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              message.profileID.utf8.count <= 128,
+              (message.browserFamily?.utf8.count ?? 0) <= 16,
+              (message.extensionVersion?.utf8.count ?? 0) <= 64 else { return false }
+        switch message.operation {
+        case "publish":
+            return message.stream == "browserToSafari"
+                && message.events != nil
+                && message.events!.count <= safariSyncMaximumPageSize
+        case "pull":
+            return message.stream == "safariToBrowser"
+        case "ack":
+            return message.stream == "safariToBrowser" && message.throughSequence != nil
+        case "outcome":
+            return message.eventID != nil && message.outcome != nil
+        default:
+            return false
+        }
+    }
+
+    private func descriptors(activeProfileID: String?) -> [BrowserProfileDescriptor] {
+        let cutoff = Date().addingTimeInterval(-10 * 60)
+        return observedProfiles.compactMap { profileID, observed in
+            guard observed.lastSeen > cutoff else { return nil }
+            return BrowserProfileDescriptor(
+                profileID: profileID,
+                browserFamily: observed.browserFamily,
+                extensionVersion: observed.extensionVersion,
+                lastSeen: observed.lastSeen,
+                active: profileID == activeProfileID
+            )
+        }.sorted { lhs, rhs in
+            if lhs.active != rhs.active { return lhs.active }
+            if lhs.browserFamily != rhs.browserFamily { return lhs.browserFamily < rhs.browserFamily }
+            return lhs.profileID < rhs.profileID
+        }
     }
 
     private func harvestSafariVisits(state: inout State, profileID: String) throws {
