@@ -27,7 +27,7 @@ Chrome/Edge extension
 SafariSyncBridge — no FDA
         │ role + nonce + HMAC, Unix socket 0600
         ▼
-SafariSyncAgent.app sibling process — FDA only
+Safari Chromium History Sync Agent.app sibling process — FDA only
         │ exact schema adapter
         ▼
 Safari History.db ── Safari CloudHistory ── iPhone Safari
@@ -82,10 +82,17 @@ The Agent learns candidate profile IDs from ordinary authenticated Extension tra
 
 ## Setup and distribution
 
-The Menu app owns setup because it does not have Full Disk Access and needs no new Agent repair commands. The user explicitly selects Chrome Stable, Edge Stable, or both. The coordinator creates or repairs a Native Messaging manifest only for selected browsers and removes only product-owned matching manifests when a browser is deselected. It never creates a Native Messaging directory for an unselected browser.
+The Menu app owns setup because it does not have Full Disk Access. The user explicitly selects Chrome Stable, Edge Stable, or both. The coordinator creates or repairs a Native Messaging manifest only for selected browsers and removes only product-owned matching manifests when a browser is deselected. It never creates a Native Messaging directory for an unselected browser.
 
-The Extension is bundled as an unpacked-development artifact inside the Menu app. Setup opens the selected browser's extensions page and reveals that folder; browser approval and macOS privacy approval remain user actions. The signed, notarized PKG is payload-only and installs the Menu and Agent as sibling app bundles under `/Applications`. User-specific manifests and login-item state are created on first launch, never by privileged installer scripts.
+The Agent recognizes separate blocked issue codes for an unsupported runtime, Safari database identity change, invalid Safari arrival anchor, unavailable Safari access, unavailable Keychain access, and unreadable sealed state. Only authenticated `menu` requests can invoke recovery, and only while the matching issue is blocked:
+
+- `resetSafariCursor` is limited to identity or anchor failures. It establishes the current Safari baseline while preserving the active profile, outbox, recovery entries, and delivery ledger.
+- `resetAgentState` is limited to unreadable sealed state. It removes only `state.sealed` and its unresolved-count sidecar, warns that pending work can be lost, and establishes the current Safari baseline. Safari and Chromium history and the delivery ledger remain untouched. It is never exposed for a Keychain failure.
+
+There is no generic repair command.
+
+The Extension is bundled as an unpacked-development artifact inside the Menu app. Setup opens the selected browser's extensions page and reveals that folder; browser approval and macOS privacy approval remain user actions. The ad-hoc-signed app bundles and unsigned local PKG are payload-only and install the Menu and Agent as sibling app bundles under `/Applications`. User-specific manifests and login-item state are created on first launch, never by privileged installer scripts. Store distribution, Developer ID signing, and notarization are not implemented.
 
 ## Migration and rollback
 
-Version 6 must not run concurrently with the legacy Python writer. Setup detects the legacy host or writer and blocks synchronization until the user removes it; it does not silently delete legacy state. Rollback is an explicit operator procedure: quit the Menu app, stop the Agent, disable the Menu app under Open at Login, remove only product-owned `com.local.safari_history_sync` manifests, then install the prior version. It does not rewrite Safari history or silently remove encrypted pending data.
+Version 6 must not run concurrently with the legacy Python writer. Setup detects the legacy host or writer and blocks synchronization until the user removes it; it does not silently delete legacy state. Rollback is an explicit operator procedure: quit the Menu app, stop the Agent, disable the Menu app under Open at Login, remove only product-owned `io.github.irismouth.safari_chromium_history_sync` manifests, then install the prior version. It does not rewrite Safari history or silently remove encrypted pending data.

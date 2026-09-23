@@ -27,6 +27,10 @@ struct SafariSyncCoreIntegrationTests {
         try boundsObservedProfiles()
         try agentInterfacesPersistProfileAndExchangeState()
         try recoveryOutcomeIsIdempotent()
+        try classifiesHistoryCursorFailures()
+        try gatesRecoveryCommandsByRoleStateAndIssue()
+        try cursorResetPreservesProfileAndQueues()
+        try stateResetPreservesHistoryAndDeliveryLedger()
         try classifiesOnlySQLiteContentionAsTransient()
         try migratesVersionOneAgentState()
         try rejectsFutureAgentState()
@@ -223,6 +227,180 @@ struct SafariSyncCoreIntegrationTests {
             false,
             "SQLite corruption classification"
         )
+    }
+
+    static func classifiesHistoryCursorFailures() throws {
+        let fixture = try HistoryFixture()
+        let key = Data(repeating: 21, count: 32)
+        let store = SafariHistoryStore(databaseURL: fixture.url, ledgerURL: fixture.ledgerURL)
+        let baseline = try store.arrivalBaseline(authenticationKey: key)
+
+        do {
+            _ = try store.newVisits(after: SafariArrivalCursor(
+                databaseIdentity: "different-database",
+                visitID: baseline.visitID,
+                rowAuthenticator: baseline.rowAuthenticator
+            ), authenticationKey: key)
+            throw IntegrationFailure.assertion("database identity change was accepted")
+        } catch SafariHistoryError.historyIdentityChanged {
+            try expect(
+                AgentIssueCode.forHistoryError(.historyIdentityChanged),
+                AgentIssueCode.historyIdentityChanged,
+                "identity issue code"
+            )
+        }
+
+        do {
+            _ = try store.newVisits(after: SafariArrivalCursor(
+                databaseIdentity: baseline.databaseIdentity,
+                visitID: baseline.visitID,
+                rowAuthenticator: Data(repeating: 0, count: 32)
+            ), authenticationKey: key)
+            throw IntegrationFailure.assertion("invalid history anchor was accepted")
+        } catch SafariHistoryError.historyAnchorInvalid {
+            try expect(
+                AgentIssueCode.forHistoryError(.historyAnchorInvalid),
+                AgentIssueCode.historyAnchorInvalid,
+                "anchor issue code"
+            )
+        }
+    }
+
+    static func gatesRecoveryCommandsByRoleStateAndIssue() throws {
+        try expect(RecoveryCommandPolicy.allows(
+            role: "menu",
+            operation: RecoveryCommandPolicy.resetSafariCursor,
+            runtimeState: "blocked",
+            issueCode: AgentIssueCode.historyIdentityChanged
+        ), true, "menu identity cursor reset")
+        try expect(RecoveryCommandPolicy.allows(
+            role: "menu",
+            operation: RecoveryCommandPolicy.resetSafariCursor,
+            runtimeState: "blocked",
+            issueCode: AgentIssueCode.historyAnchorInvalid
+        ), true, "menu anchor cursor reset")
+        try expect(RecoveryCommandPolicy.allows(
+            role: "menu",
+            operation: RecoveryCommandPolicy.resetAgentState,
+            runtimeState: "blocked",
+            issueCode: AgentIssueCode.stateUnreadable
+        ), true, "menu state reset")
+        try expect(RecoveryCommandPolicy.allows(
+            role: "bridge",
+            operation: RecoveryCommandPolicy.resetAgentState,
+            runtimeState: "blocked",
+            issueCode: AgentIssueCode.stateUnreadable
+        ), false, "bridge cannot reset state")
+        try expect(RecoveryCommandPolicy.allows(
+            role: "menu",
+            operation: RecoveryCommandPolicy.resetAgentState,
+            runtimeState: "blocked",
+            issueCode: AgentIssueCode.keychainUnavailable
+        ), false, "keychain issue cannot expose state reset")
+        try expect(RecoveryCommandPolicy.allows(
+            role: "menu",
+            operation: RecoveryCommandPolicy.resetSafariCursor,
+            runtimeState: "ready",
+            issueCode: AgentIssueCode.historyAnchorInvalid
+        ), false, "ready runtime cannot reset cursor")
+    }
+
+    static func cursorResetPreservesProfileAndQueues() throws {
+        let fixture = try HistoryFixture()
+        let service = AgentService(
+            history: SafariHistoryStore(databaseURL: fixture.url, ledgerURL: fixture.ledgerURL),
+            stateURL: fixture.stateURL,
+            secret: Data(repeating: 22, count: 32)
+        )
+        _ = try service.selectProfile("chrome:Default")
+        let delivered = try browserMessage([
+            "version": 1,
+            "operation": "publish",
+            "stream": "browserToSafari",
+            "profileId": "chrome:Default",
+            "events": [[
+                "eventId": "cursor-reset-ledger",
+                "sequence": 1,
+                "url": "https://example.com/cursor-reset-ledger",
+            ]],
+        ])
+        _ = try service.browserExchange(delivered)
+        try fixture.insertSafariVisit(url: "https://example.com/recovery-before-reset")
+        let pull = try browserMessage([
+            "version": 1,
+            "operation": "pull",
+            "stream": "safariToBrowser",
+            "profileId": "chrome:Default",
+            "afterSequence": 0,
+            "limit": 128,
+        ])
+        let firstPage = try JSONSerialization.jsonObject(with: service.browserExchange(pull)) as! [String: Any]
+        let recoveryEvent = (firstPage["events"] as! [[String: Any]]).first!
+        let outcome = try browserMessage([
+            "version": 1,
+            "operation": "outcome",
+            "profileId": "chrome:Default",
+            "eventId": recoveryEvent["eventId"] as! String,
+            "outcome": "FINALIZED_UNCONFIRMED",
+        ])
+        _ = try service.browserExchange(outcome)
+        try fixture.insertSafariVisit(url: "https://example.com/outbox-before-reset")
+        _ = try service.browserExchange(pull)
+        let before = try service.status()
+
+        try service.resetSafariCursor()
+        let after = try service.status()
+        try expect(after.activeProfileID, before.activeProfileID, "cursor reset active profile")
+        try expect(after.pendingSafariToBrowser, before.pendingSafariToBrowser, "cursor reset outbox")
+        try expect(after.recoveryCount, before.recoveryCount, "cursor reset recovery")
+        _ = try service.browserExchange(delivered)
+        try expect(try fixture.scalarInt("SELECT COUNT(*) FROM history_visits"), 3, "cursor reset delivery ledger")
+    }
+
+    static func stateResetPreservesHistoryAndDeliveryLedger() throws {
+        let fixture = try HistoryFixture()
+        let secret = Data(repeating: 23, count: 32)
+        let service = AgentService(
+            history: SafariHistoryStore(databaseURL: fixture.url, ledgerURL: fixture.ledgerURL),
+            stateURL: fixture.stateURL,
+            secret: secret
+        )
+        _ = try service.selectProfile("edge:Default")
+        let publish = try browserMessage([
+            "version": 1,
+            "operation": "publish",
+            "stream": "browserToSafari",
+            "profileId": "edge:Default",
+            "events": [[
+                "eventId": "ledger-survives-reset",
+                "sequence": 1,
+                "url": "https://example.com/ledger-survives-reset",
+            ]],
+        ])
+        _ = try service.browserExchange(publish)
+        let chromiumHistory = fixture.stateURL.appendingPathExtension("chromium-history")
+        let unrelatedRuntimeFile = fixture.stateURL.appendingPathExtension("preserve")
+        defer {
+            try? FileManager.default.removeItem(at: chromiumHistory)
+            try? FileManager.default.removeItem(at: unrelatedRuntimeFile)
+        }
+        try Data("browser history sentinel".utf8).write(to: chromiumHistory)
+        try Data("runtime sentinel".utf8).write(to: unrelatedRuntimeFile)
+        try Data("unreadable-state".utf8).write(to: fixture.stateURL)
+        try expect(try service.status().issueCode, AgentIssueCode.stateUnreadable, "corrupt state status")
+
+        try service.resetAgentState()
+        try expect(try service.status().activeProfileID, nil, "state reset clears unreadable profile")
+        _ = try service.selectProfile("edge:Default")
+        let replay = try JSONSerialization.jsonObject(with: service.browserExchange(publish)) as! [String: Any]
+        try expect(replay["status"] as? String, "ACCEPTED", "ledger replay receipt")
+        try expect(try fixture.scalarInt("SELECT COUNT(*) FROM history_visits"), 1, "state reset preserves history and ledger idempotency")
+        try expect(try Data(contentsOf: chromiumHistory), Data("browser history sentinel".utf8), "state reset preserves Chromium history")
+        try expect(try Data(contentsOf: unrelatedRuntimeFile), Data("runtime sentinel".utf8), "state reset deletes only state files")
+    }
+
+    static func browserMessage(_ object: [String: Any]) throws -> Data {
+        try JSONSerialization.data(withJSONObject: object)
     }
 
     static func boundsObservedProfiles() throws {
@@ -446,7 +624,7 @@ struct SafariSyncCoreIntegrationTests {
             id: "edge",
             directory: root.appendingPathComponent("edge")
         )
-        let hostName = "com.local.safari_history_sync"
+        let hostName = ProductIdentity.nativeMessagingHost
         let bridgeURL = URL(fileURLWithPath: "/Applications/Safari Chromium History Sync.app/Contents/MacOS/SafariSyncBridge")
         let bridgeSuffix = "/Safari Chromium History Sync.app/Contents/MacOS/SafariSyncBridge"
 
@@ -465,7 +643,28 @@ struct SafariSyncCoreIntegrationTests {
         let attributes = try FileManager.default.attributesOfItem(atPath: chromeManifest.path)
         try expect(attributes[.posixPermissions] as? NSNumber, NSNumber(value: 0o600), "manifest mode")
 
-        try FileManager.default.createDirectory(at: edge.directory, withIntermediateDirectories: true)
+        try NativeMessagingManifestStore.reconcile(
+            targets: [chrome, edge],
+            selectedTargetIDs: [edge.id],
+            hostName: hostName,
+            bridgeURL: bridgeURL,
+            extensionID: "abcdefghijklmnopabcdefghijklmnop",
+            bridgeSuffix: bridgeSuffix
+        )
+        try expect(FileManager.default.fileExists(atPath: chromeManifest.path), false, "Chrome-only manifest removed")
+        try expect(FileManager.default.fileExists(atPath: edgeManifest.path), true, "Edge-only manifest created")
+
+        try NativeMessagingManifestStore.reconcile(
+            targets: [chrome, edge],
+            selectedTargetIDs: [chrome.id, edge.id],
+            hostName: hostName,
+            bridgeURL: bridgeURL,
+            extensionID: "abcdefghijklmnopabcdefghijklmnop",
+            bridgeSuffix: bridgeSuffix
+        )
+        try expect(FileManager.default.fileExists(atPath: chromeManifest.path), true, "both browsers Chrome manifest")
+        try expect(FileManager.default.fileExists(atPath: edgeManifest.path), true, "both browsers Edge manifest")
+
         try Data("{\"name\":\"someone.else\",\"path\":\"/tmp/foreign\"}".utf8).write(to: edgeManifest)
         try NativeMessagingManifestStore.reconcile(
             targets: [chrome, edge],

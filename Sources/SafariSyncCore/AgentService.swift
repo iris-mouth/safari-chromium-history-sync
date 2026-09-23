@@ -222,6 +222,24 @@ public final class AgentService: @unchecked Sendable {
         }
     }
 
+    public func resetSafariCursor() throws {
+        try lock.withLock {
+            var state = try persistence.load() ?? State()
+            state.cursor = try history.arrivalBaseline(authenticationKey: authenticationKey)
+            try persist(state)
+        }
+    }
+
+    public func resetAgentState() throws {
+        try lock.withLock {
+            let baseline = try history.arrivalBaseline(authenticationKey: authenticationKey)
+            try persistence.removeStateAndUnresolvedCount()
+            var state = State()
+            state.cursor = baseline
+            try persist(state)
+        }
+    }
+
     public func status() throws -> HealthSnapshot {
         lock.withLock {
             let state: State
@@ -232,7 +250,7 @@ public final class AgentService: @unchecked Sendable {
                     enabled: false,
                     activeProfileID: nil,
                     runtimeState: "blocked",
-                    issueCode: "stateUnreadable",
+                    issueCode: AgentIssueCode.stateUnreadable,
                     agentBuild: agentBuild,
                     connectedProfiles: descriptors(activeProfileID: nil),
                     pendingBrowserToSafari: 0,

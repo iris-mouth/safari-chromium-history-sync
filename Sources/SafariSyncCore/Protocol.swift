@@ -160,6 +160,16 @@ public struct ProfileSwitchStatus: Codable, Sendable {
     }
 }
 
+public struct RecoveryCommandStatus: Codable, Equatable, Sendable {
+    public let state: String
+    public let operation: String
+
+    public init(state: String, operation: String) {
+        self.state = state
+        self.operation = operation
+    }
+}
+
 public enum ExchangeResponse: Encodable, Sendable {
     case receipt(status: String, throughSequence: Int64? = nil)
     case page(stream: String, events: [SyncEvent], hasMore: Bool)

@@ -4,9 +4,13 @@ import SafariSyncCore
 let environment = ProcessInfo.processInfo.environment
 let home = FileManager.default.homeDirectoryForCurrentUser
 let socketPath = environment["SAFARI_SYNC_SOCKET_PATH"] ?? home
-    .appendingPathComponent("Library/Application Support/Safari History Sync/agent.sock").path
+    .appendingPathComponent(
+        "Library/Application Support/\(ProductIdentity.applicationSupportDirectoryName)/agent.sock"
+    ).path
 let ipcSecretURL = URL(fileURLWithPath: environment["SAFARI_SYNC_STATE_DIR"] ?? home
-    .appendingPathComponent("Library/Application Support/Safari History Sync").path)
+    .appendingPathComponent(
+        "Library/Application Support/\(ProductIdentity.applicationSupportDirectoryName)"
+    ).path)
     .appendingPathComponent("ipc.secret")
 
 do {

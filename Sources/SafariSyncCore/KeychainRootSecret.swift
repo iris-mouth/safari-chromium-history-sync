@@ -2,7 +2,7 @@ import Foundation
 import Security
 
 public enum KeychainRootSecret {
-    private static let service = "com.local.safari-history-sync.ipc"
+    private static let service = ProductIdentity.keychainService
     private static let account = "root-v1"
 
     public static func load(createIfMissing: Bool) throws -> Data {

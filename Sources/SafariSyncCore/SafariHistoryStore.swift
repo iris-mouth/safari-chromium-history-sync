@@ -19,6 +19,12 @@ public struct SafariArrivalCursor: Codable, Equatable, Sendable {
     public let databaseIdentity: String
     public let visitID: Int64
     public let rowAuthenticator: Data
+
+    public init(databaseIdentity: String, visitID: Int64, rowAuthenticator: Data) {
+        self.databaseIdentity = databaseIdentity
+        self.visitID = visitID
+        self.rowAuthenticator = rowAuthenticator
+    }
 }
 
 public struct SafariVisit: Codable, Equatable, Sendable {
@@ -29,6 +35,8 @@ public struct SafariVisit: Codable, Equatable, Sendable {
 public enum SafariHistoryError: Error, Equatable {
     case databaseUnavailable(String)
     case incompatibleSchema(String)
+    case historyIdentityChanged
+    case historyAnchorInvalid
     case sqlite(code: Int32, message: String)
     case invalidURL
 
@@ -100,7 +108,7 @@ public final class SafariHistoryStore: @unchecked Sendable {
         try lock.withLock {
             let currentIdentity = try databaseIdentity()
             guard cursor.databaseIdentity == currentIdentity else {
-                throw SafariHistoryError.incompatibleSchema("history database identity changed")
+                throw SafariHistoryError.historyIdentityChanged
             }
             let db = try Connection(path: databaseURL.path)
             defer { db.close() }
@@ -257,7 +265,7 @@ public final class SafariHistoryStore: @unchecked Sendable {
         if cursor.visitID == 0 {
             let expected = rowHMAC(id: 0, url: "EMPTY", time: 0, key: key)
             guard expected == cursor.rowAuthenticator else {
-                throw SafariHistoryError.incompatibleSchema("empty history anchor changed")
+                throw SafariHistoryError.historyAnchorInvalid
             }
             return
         }
@@ -268,12 +276,12 @@ public final class SafariHistoryStore: @unchecked Sendable {
         defer { sqlite3_finalize(query) }
         sqlite3_bind_int64(query, 1, cursor.visitID)
         guard sqlite3_step(query) == SQLITE_ROW else {
-            throw SafariHistoryError.incompatibleSchema("history anchor is missing")
+            throw SafariHistoryError.historyAnchorInvalid
         }
         let url = columnText(query, index: 0)
         let time = sqlite3_column_double(query, 1)
         guard rowHMAC(id: cursor.visitID, url: url, time: time, key: key) == cursor.rowAuthenticator else {
-            throw SafariHistoryError.incompatibleSchema("history anchor changed")
+            throw SafariHistoryError.historyAnchorInvalid
         }
     }
 

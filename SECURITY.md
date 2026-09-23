@@ -6,15 +6,15 @@ Safari Chromium History Sync handles private browsing data locally. Reports invo
 
 These files contain private history state:
 
-- `~/Library/Application Support/Safari History Sync/state.sealed`
-- `~/Library/Application Support/Safari History Sync/delivery-ledger.sqlite`
+- `~/Library/Application Support/Safari Chromium History Sync/state.sealed`
+- `~/Library/Application Support/Safari Chromium History Sync/delivery-ledger.sqlite`
 - `~/Library/Safari/History.db`
 
 Do not attach those files publicly unless you have scrubbed them.
 
 ## Design Constraints
 
-- Only `SafariSyncAgent` receives Full Disk Access and writes Safari's history database.
+- Only `/Applications/Safari Chromium History Sync Agent.app` receives Full Disk Access; its `SafariSyncAgent` executable writes Safari's history database.
 - The no-FDA Bridge and Menu authenticate to the Agent over a mode-`0600` Unix socket using a random owner-only mode-`0600` IPC key.
 - Sensitive Agent state is sealed with AES-GCM using an Agent-only Keychain root secret; Bridge and Menu never access Keychain.
 - Safari history sync is intentionally narrow and insert-only.

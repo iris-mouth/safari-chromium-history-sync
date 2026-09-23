@@ -9,7 +9,7 @@ Version 6 is a history-only rewrite. It intentionally does not sync bookmarks, R
 The installation contains two app bundles and three separately signed executables:
 
 - `SafariSyncMenu`: menu UI and profile selection; no Full Disk Access.
-- `SafariSyncAgent.app`: an independent sibling app and the only process granted Full Disk Access; owns Safari DB access and durable state.
+- `Safari Chromium History Sync Agent.app`: an independent sibling app and the only process granted Full Disk Access; its internal executable remains `SafariSyncAgent` and it owns Safari DB access and durable state.
 - `SafariSyncBridge`: Native Messaging stdin/stdout bridge; no Full Disk Access.
 
 Bridge and Menu requests use role-bound HMAC authentication over a mode-`0600` Unix socket. The IPC key is a random mode-`0600` file owned by the current user; Bridge and Menu never access Keychain. This rejects malformed, unauthenticated, and replayed traffic, but it is not an identity boundary against other processes already running as the same macOS user: such a process can read the shared IPC key. Agent state, including URLs and recovery records, is sealed with AES-GCM using an Agent-only Keychain root secret. The extension requests only `history`, `storage`, `nativeMessaging`, and `alarms`.
@@ -32,16 +32,7 @@ Requirements are Apple command-line build tools and Node.js for development test
 ./scripts/package-app.sh
 ```
 
-The packaging script creates both standalone app bundles and a payload-only PKG that installs both apps under `/Applications`. It contains no preinstall or postinstall scripts. Without signing variables, it uses ad-hoc app signatures and an unsigned PKG for local development.
-
-For Developer ID signing and PKG notarization:
-
-```sh
-CODESIGN_IDENTITY='Developer ID Application: …' \
-INSTALLER_IDENTITY='Developer ID Installer: …' \
-NOTARY_PROFILE='notary-profile' \
-./scripts/package-app.sh
-```
+The packaging script creates both standalone app bundles and a payload-only PKG that installs both apps under `/Applications`. It contains no preinstall or postinstall scripts. It produces ad-hoc-signed app bundles and an unsigned local PKG. The unpacked extension keeps its fixed ID; store distribution, Developer ID signing, and notarization are outside this distribution.
 
 ## Install
 
@@ -49,7 +40,7 @@ NOTARY_PROFILE='notary-profile' \
 2. Open **Safari Chromium History Sync** and choose **Start Setup**.
 3. Select Chrome Stable, Edge Stable, or both. Setup writes a Native Messaging manifest only for browsers you explicitly select; it does not create files for an installed but unused browser.
 4. Setup opens each selected browser's extensions page and reveals the bundled `ChromiumExtension` folder. Turn on Developer mode, choose **Load unpacked**, and select that folder. Extension and profile IDs are detected automatically; there is nothing to copy and paste.
-5. Approve Open at Login if macOS requests it, then grant Full Disk Access to `/Applications/SafariSyncAgent.app` only. Do not grant it to Chrome, Edge, the Menu app, or the Bridge.
+5. Approve Open at Login if macOS requests it, then grant Full Disk Access to `/Applications/Safari Chromium History Sync Agent.app` only. Do not grant it to Chrome, Edge, the Menu app, or the Bridge.
 6. If one browser profile connects, it becomes active automatically. If several connect, choose one in the setup window.
 
 Setup is safe to run again. It checks the installed components and changes only product-owned settings for the selected browsers. Deselecting a browser removes only this product's matching manifest. The setup and diagnostics screen reports actionable problems instead of requiring command-line scripts.
@@ -65,9 +56,10 @@ Do not run version 6 beside the legacy Python writer. Setup reports known `com.l
 - A confirmed Safari-imported Chromium visit becomes that URL's visit marker, so its `onVisited` callback is not echoed back to Safari; a later real visit remains eligible for sync.
 - A delivery gets at most two immediate attempts. Unconfirmed outcomes enter the encrypted profile-scoped recovery ledger at 5m/15m/30m/2h/6h intervals, capped at 20 retries and retained when exhausted.
 - Changing the active browser profile is immediate. Pending outbox and recovery work remains scoped to the profile that created it and resumes only when that profile is selected again; it is never moved to the new profile.
-- Database replacement or an arrival-anchor mismatch stops scanning. Resume from the current point only after explicit operator action.
+- Database replacement or an arrival-anchor mismatch stops scanning. The Menu can reset only the Safari arrival cursor after explicit confirmation; this advances to the current baseline while preserving the active profile, outbox, recovery work, and delivery ledger.
+- If sealed Agent state is unreadable, the Menu can reset only `state.sealed` and its unresolved-count sidecar after warning that pending work and profile selection can be lost. Safari and Chromium history plus the delivery ledger are preserved. State reset is not offered when Keychain access itself is unavailable.
 
-Runtime files live in `~/Library/Application Support/Safari History Sync` and can contain private browsing URLs. This legacy internal directory name is intentionally retained so upgrades keep the existing encrypted state and delivery ledger. Use **Setup & Diagnostics** in the Menu app to inspect the installation without exposing URLs.
+Runtime files live in `~/Library/Application Support/Safari Chromium History Sync` and can contain private browsing URLs. This release intentionally starts from a clean baseline rather than migrating the prior local state directory. Use **Setup & Diagnostics** in the Menu app to inspect the installation without exposing URLs.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for protocol and failure semantics.
 

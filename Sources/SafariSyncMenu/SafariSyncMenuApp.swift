@@ -4,22 +4,24 @@ import ServiceManagement
 
 @MainActor
 final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
-    private let agentBundleIdentifier = "com.local.safari-history-sync.agent"
+    private let agentBundleIdentifier = ProductIdentity.agentBundleIdentifier
     private let setupCoordinator = SetupCoordinator()
     private var statusItem: NSStatusItem?
     private var healthItem = NSMenuItem(title: "Checking status…", action: nil, keyEquivalent: "")
     private var profileItem = NSMenuItem(title: "Change Profile…", action: #selector(changeProfile), keyEquivalent: "")
+    private var recoveryItem = NSMenuItem(title: "Resolve Sync Issue…", action: #selector(resolveBlockedIssue), keyEquivalent: "")
     private var browserCheckboxes: [SupportedBrowser: NSButton] = [:]
     private var setupStartButton: NSButton?
     private var latestHealth: HealthSnapshot?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        item.button?.title = "Safari Chromium History Sync"
+        item.button?.title = ProductIdentity.menuBarLabel
         let menu = NSMenu()
         menu.delegate = self
         menu.addItem(healthItem)
         menu.addItem(profileItem)
+        menu.addItem(recoveryItem)
         menu.addItem(.separator())
         menu.addItem(withTitle: "Setup & Diagnostics…", action: #selector(showSetup), keyEquivalent: "")
         menu.addItem(withTitle: "Refresh Status", action: #selector(refreshStatus), keyEquivalent: "r")
@@ -28,6 +30,7 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         item.menu = menu
         statusItem = item
         profileItem.isHidden = true
+        recoveryItem.isHidden = true
 
         let setupState = setupCoordinator.inspect()
         if !setupState.legacyArtifacts.isEmpty {
@@ -170,12 +173,14 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
         let agentURL = agentURL()
-        let executable = agentURL.appendingPathComponent("Contents/MacOS/SafariSyncAgent")
+        let executable = agentURL.appendingPathComponent(
+            "Contents/MacOS/\(ProductIdentity.agentExecutableName)"
+        )
         guard FileManager.default.isExecutableFile(atPath: executable.path) else {
             throw NSError(
                 domain: "SafariHistorySync",
                 code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "SafariSyncAgent.app must be installed beside Safari Chromium History Sync.app."]
+                userInfo: [NSLocalizedDescriptionKey: "\(ProductIdentity.agentBundleName) must be installed beside \(ProductIdentity.productName).app."]
             )
         }
         let configuration = NSWorkspace.OpenConfiguration()
@@ -267,6 +272,7 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             latestHealth = health
             profileItem.isHidden = health.connectedProfiles.isEmpty
+            recoveryItem.isHidden = health.runtimeState != "blocked"
             if health.runtimeState == "initializing" {
                 healthItem.title = "Agent starting…"
             } else if health.runtimeState == "blocked" {
@@ -284,6 +290,7 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } catch {
             latestHealth = nil
             profileItem.isHidden = true
+            recoveryItem.isHidden = true
             healthItem.title = "Agent not connected"
         }
     }
@@ -311,7 +318,9 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     nonisolated private static func requestSync(_ command: MenuCommand) throws -> Data {
         let runtime = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/Safari History Sync")
+            .appendingPathComponent(
+                "Library/Application Support/\(ProductIdentity.applicationSupportDirectoryName)"
+            )
         let secret = try IPCSecretStore.load(from: runtime.appendingPathComponent("ipc.secret"), createIfMissing: false)
         let body = try JSONEncoder().encode(command)
         let authenticated = SharedSecret.authenticate(body: body, role: "menu", secret: secret)
@@ -323,19 +332,33 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let alert = NSAlert()
         alert.messageText = message(for: issue)
         switch issue {
-        case "safariAccessUnavailable":
-            alert.informativeText = "Verify that SafariSyncAgent.app has Full Disk Access, then run Setup & Diagnostics again. If access is already enabled, reinstall a qualified app update."
+        case AgentIssueCode.safariAccessUnavailable:
+            alert.informativeText = "Verify that \(ProductIdentity.agentBundleName) has Full Disk Access, then run Setup & Diagnostics again. If access is already enabled, reinstall a qualified app update."
             alert.addButton(withTitle: "Open Full Disk Access")
             alert.addButton(withTitle: "Later")
             if alert.runModal() == .alertFirstButtonReturn,
                let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") {
                 NSWorkspace.shared.open(url)
             }
-        case "runtimeUnsupported":
+        case AgentIssueCode.runtimeUnsupported:
             alert.informativeText = "Sync stopped because the compatibility check failed. Install a qualified app update before resuming."
             alert.runModal()
-        case "stateUnreadable":
-            alert.informativeText = "The encrypted Agent state could not be opened. Existing recovery data was not deleted."
+        case AgentIssueCode.historyIdentityChanged, AgentIssueCode.historyAnchorInvalid:
+            alert.informativeText = "Safari's history identity or saved arrival anchor changed. Resetting the Safari cursor starts scanning at the current Safari baseline. It preserves the active profile, pending outbox, recovery work, and delivery ledger."
+            alert.addButton(withTitle: "Reset Safari Cursor")
+            alert.addButton(withTitle: "Cancel")
+            if alert.runModal() == .alertFirstButtonReturn {
+                Task { await runRecoveryCommand(RecoveryCommandPolicy.resetSafariCursor) }
+            }
+        case AgentIssueCode.stateUnreadable:
+            alert.informativeText = "The encrypted Agent state cannot be opened. Resetting it can lose pending sync work and the active-profile selection. It deletes only state.sealed and its unresolved-count sidecar, preserves Safari and Chromium history plus the delivery ledger, and restarts from the current Safari baseline."
+            alert.addButton(withTitle: "Reset Agent State")
+            alert.addButton(withTitle: "Cancel")
+            if alert.runModal() == .alertFirstButtonReturn {
+                Task { await runRecoveryCommand(RecoveryCommandPolicy.resetAgentState) }
+            }
+        case AgentIssueCode.keychainUnavailable:
+            alert.informativeText = "The Agent-only Keychain item is unavailable. Unlock or repair Keychain access, then restart the Agent. Agent state reset is intentionally unavailable because it cannot fix Keychain access."
             alert.runModal()
         default:
             alert.informativeText = "Run Setup & Diagnostics again."
@@ -345,9 +368,12 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func message(for issue: String?) -> String {
         switch issue {
-        case "runtimeUnsupported": "Compatibility check failed · sync stopped"
-        case "safariAccessUnavailable": "Safari history unavailable · check Full Disk Access"
-        case "stateUnreadable": "Encrypted state unavailable · sync stopped"
+        case AgentIssueCode.runtimeUnsupported: "Compatibility check failed · sync stopped"
+        case AgentIssueCode.historyIdentityChanged: "Safari history was replaced · cursor reset required"
+        case AgentIssueCode.historyAnchorInvalid: "Safari history anchor changed · cursor reset required"
+        case AgentIssueCode.safariAccessUnavailable: "Safari history unavailable · check Full Disk Access"
+        case AgentIssueCode.keychainUnavailable: "Keychain unavailable · sync stopped"
+        case AgentIssueCode.stateUnreadable: "Encrypted state unavailable · state reset available"
         case "agentVersionMismatch": "Agent update requires restart"
         case "legacyWriterDetected": "Legacy writer detected · sync stopped"
         case "extensionNotConnected": "Extension not connected"
@@ -357,6 +383,32 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func showLegacyBlock(_ paths: [String]) {
         showMessage(title: "Legacy sync writer detected", detail: "Disable the legacy writer before setup. No files were removed.\n\n" + paths.joined(separator: "\n"))
+    }
+
+    @objc private func resolveBlockedIssue() {
+        showBlockedIssue(latestHealth?.issueCode)
+    }
+
+    private func runRecoveryCommand(_ operation: String) async {
+        do {
+            let response = try await requestAsync(MenuCommand(operation: operation))
+            if let failure = try? JSONDecoder().decode(TypedError.self, from: response),
+               failure.type == "error" {
+                throw failure
+            }
+            let status = try JSONDecoder().decode(RecoveryCommandStatus.self, from: response)
+            guard status.state == "READY", status.operation == operation else {
+                throw TypedError(code: "RECOVERY_FAILED")
+            }
+            await refreshStatusAsync()
+            let detail = operation == RecoveryCommandPolicy.resetSafariCursor
+                ? "The Safari arrival cursor now starts at the current baseline. Pending queues and the delivery ledger were preserved."
+                : "Agent state now starts at the current Safari baseline. Safari and Chromium history plus the delivery ledger were preserved."
+            showMessage(title: "Sync recovery complete", detail: detail)
+        } catch {
+            NSAlert(error: error).runModal()
+            await refreshStatusAsync()
+        }
     }
 
     private func stopAgent() {
@@ -369,7 +421,7 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func agentURL() -> URL {
         Bundle.main.bundleURL.deletingLastPathComponent()
-            .appendingPathComponent("SafariSyncAgent.app", isDirectory: true)
+            .appendingPathComponent(ProductIdentity.agentBundleName, isDirectory: true)
     }
 
     private func expectedAgentBuild() -> String? {

@@ -55,4 +55,13 @@ public final class EncryptedStateStore<State: Codable>: @unchecked Sendable {
               let count = Int(text) else { return 0 }
         return max(0, count)
     }
+
+    public func removeStateAndUnresolvedCount() throws {
+        try lock.withLock {
+            for target in [url, recoveryCountURL]
+                where FileManager.default.fileExists(atPath: target.path) {
+                try FileManager.default.removeItem(at: target)
+            }
+        }
+    }
 }

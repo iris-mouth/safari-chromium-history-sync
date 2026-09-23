@@ -36,7 +36,7 @@ struct SetupState {
 }
 
 struct SetupCoordinator {
-    static let hostName = "com.local.safari_history_sync"
+    static let hostName = ProductIdentity.nativeMessagingHost
     private static let bridgeSuffix = "/Safari Chromium History Sync.app/Contents/MacOS/SafariSyncBridge"
 
     func availableBrowsers() -> [SupportedBrowser] {
@@ -69,7 +69,7 @@ struct SetupCoordinator {
         let bridgeURL = Bundle.main.bundleURL
             .appendingPathComponent("Contents/MacOS/SafariSyncBridge")
         let agentURL = Bundle.main.bundleURL.deletingLastPathComponent()
-            .appendingPathComponent("SafariSyncAgent.app", isDirectory: true)
+            .appendingPathComponent(ProductIdentity.agentBundleName, isDirectory: true)
         guard FileManager.default.isExecutableFile(atPath: bridgeURL.path) else {
             throw SetupError.bridgeMissing
         }
@@ -157,7 +157,7 @@ enum SetupError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .bridgeMissing: "The Native Messaging bridge is missing from the installed app."
-        case .agentMissing: "SafariSyncAgent.app is missing beside the Menu app."
+        case .agentMissing: "\(ProductIdentity.agentBundleName) is missing beside the Menu app."
         case .extensionMissing: "The bundled Chromium extension is missing."
         case .extensionKeyMissing: "The bundled Chromium extension has no stable public key."
         case .bundleVersionMismatch: "The Menu and Agent app versions do not match. Reinstall the package."

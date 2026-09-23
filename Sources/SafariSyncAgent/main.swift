@@ -28,7 +28,7 @@ private final class AgentRuntime: @unchecked Sendable {
         do {
             _ = try CompatibilityGate.verify()
         } catch {
-            block("runtimeUnsupported")
+            block(AgentIssueCode.runtimeUnsupported)
             return
         }
 
@@ -36,7 +36,7 @@ private final class AgentRuntime: @unchecked Sendable {
         do {
             stateSecret = try KeychainRootSecret.load(createIfMissing: true)
         } catch {
-            block("stateUnreadable")
+            block(AgentIssueCode.keychainUnavailable)
             return
         }
 
@@ -47,10 +47,10 @@ private final class AgentRuntime: @unchecked Sendable {
         do {
             try history.validateAccessAndSchema()
         } catch SafariHistoryError.incompatibleSchema {
-            block("runtimeUnsupported")
+            block(AgentIssueCode.runtimeUnsupported)
             return
         } catch {
-            block("safariAccessUnavailable")
+            block(AgentIssueCode.safariAccessUnavailable)
             return
         }
 
@@ -61,11 +61,14 @@ private final class AgentRuntime: @unchecked Sendable {
             agentBuild: agentBuild
         )
         let timer = makeCloudTrigger(history: history)
+        let initialHealth = try? readyService.status()
         lock.withLock {
             service = readyService
             self.history = history
-            runtimeState = "ready"
-            issueCode = nil
+            runtimeState = initialHealth?.issueCode == AgentIssueCode.stateUnreadable
+                ? "blocked"
+                : "ready"
+            issueCode = initialHealth?.issueCode
             cloudTrigger = timer
         }
         timer.resume()
@@ -73,10 +76,17 @@ private final class AgentRuntime: @unchecked Sendable {
 
     func health() throws -> HealthSnapshot {
         let snapshot = lock.withLock { (service, history, runtimeState, issueCode) }
+        if snapshot.2 == "blocked", let issue = snapshot.3 {
+            return blockedHealth(issue: issue, service: snapshot.0)
+        }
         if let service = snapshot.0, let history = snapshot.1 {
             do {
                 try history.validateAccessAndSchema()
-                return try service.status()
+                let health = try service.status()
+                if health.runtimeState == "blocked", let issue = health.issueCode {
+                    block(issue)
+                }
+                return health
             } catch let error as SafariHistoryError {
                 if error.isTransientContention { return try service.status() }
                 block(issue(for: error))
@@ -97,7 +107,7 @@ private final class AgentRuntime: @unchecked Sendable {
     }
 
     func browserExchange(_ body: Data) throws -> Data {
-        guard let service = lock.withLock({ service }) else {
+        guard let service = lock.withLock({ runtimeState == "ready" ? service : nil }) else {
             let issue = lock.withLock { issueCode }
             return try JSONEncoder().encode(TypedError(
                 code: issue ?? "AGENT_INITIALIZING",
@@ -112,12 +122,18 @@ private final class AgentRuntime: @unchecked Sendable {
             }
             let code = issue(for: error)
             if code != "INVALID_MESSAGE" { block(code) }
-            return try JSONEncoder().encode(TypedError(code: code, retryable: code == "safariAccessUnavailable"))
+            return try JSONEncoder().encode(TypedError(
+                code: code,
+                retryable: code == AgentIssueCode.safariAccessUnavailable
+            ))
+        } catch {
+            block(AgentIssueCode.stateUnreadable)
+            return try JSONEncoder().encode(TypedError(code: AgentIssueCode.stateUnreadable))
         }
     }
 
     func selectProfile(_ profileID: String) throws -> String {
-        guard let service = lock.withLock({ service }) else {
+        guard let service = lock.withLock({ runtimeState == "ready" ? service : nil }) else {
             throw TypedError(code: lock.withLock { issueCode } ?? "AGENT_INITIALIZING", retryable: true)
         }
         do {
@@ -128,41 +144,73 @@ private final class AgentRuntime: @unchecked Sendable {
             }
             let code = issue(for: error)
             block(code)
-            throw TypedError(code: code, retryable: code == "safariAccessUnavailable")
+            throw TypedError(code: code, retryable: code == AgentIssueCode.safariAccessUnavailable)
+        } catch {
+            block(AgentIssueCode.stateUnreadable)
+            throw TypedError(code: AgentIssueCode.stateUnreadable)
+        }
+    }
+
+    func performRecovery(operation: String, role: String) throws -> RecoveryCommandStatus {
+        let snapshot = lock.withLock { (service, runtimeState, issueCode) }
+        guard RecoveryCommandPolicy.allows(
+            role: role,
+            operation: operation,
+            runtimeState: snapshot.1,
+            issueCode: snapshot.2
+        ), let service = snapshot.0 else {
+            throw TypedError(code: "RECOVERY_NOT_ALLOWED")
+        }
+        do {
+            switch operation {
+            case RecoveryCommandPolicy.resetSafariCursor:
+                try service.resetSafariCursor()
+            case RecoveryCommandPolicy.resetAgentState:
+                try service.resetAgentState()
+            default:
+                throw TypedError(code: "RECOVERY_NOT_ALLOWED")
+            }
+            lock.withLock {
+                runtimeState = "ready"
+                issueCode = nil
+            }
+            return RecoveryCommandStatus(state: "READY", operation: operation)
+        } catch let error as SafariHistoryError {
+            let code = issue(for: error)
+            block(code)
+            throw TypedError(code: code, retryable: code == AgentIssueCode.safariAccessUnavailable)
+        } catch let error as TypedError {
+            throw error
+        } catch {
+            block(AgentIssueCode.stateUnreadable)
+            throw TypedError(code: AgentIssueCode.stateUnreadable)
         }
     }
 
     private func block(_ issue: String) {
         lock.withLock {
-            service = nil
-            history = nil
             runtimeState = "blocked"
             issueCode = issue
         }
     }
 
     private func issue(for error: SafariHistoryError) -> String {
-        switch error {
-        case .incompatibleSchema:
-            "runtimeUnsupported"
-        case .databaseUnavailable, .sqlite:
-            "safariAccessUnavailable"
-        case .invalidURL:
-            "INVALID_MESSAGE"
-        }
+        AgentIssueCode.forHistoryError(error)
     }
 
-    private func blockedHealth(issue: String) -> HealthSnapshot {
-        HealthSnapshot(
+    private func blockedHealth(issue: String, service: AgentService? = nil) -> HealthSnapshot {
+        let status = try? service?.status()
+        return HealthSnapshot(
             enabled: false,
-            activeProfileID: nil,
+            activeProfileID: status?.activeProfileID,
             runtimeState: "blocked",
             issueCode: issue,
             agentBuild: agentBuild,
-            pendingBrowserToSafari: 0,
-            pendingSafariToBrowser: 0,
-            recoveryCount: 0,
-            unrecoverableCount: 0
+            connectedProfiles: status?.connectedProfiles ?? [],
+            pendingBrowserToSafari: status?.pendingBrowserToSafari ?? 0,
+            pendingSafariToBrowser: status?.pendingSafariToBrowser ?? 0,
+            recoveryCount: status?.recoveryCount ?? 0,
+            unrecoverableCount: status?.unrecoverableCount ?? 0
         )
     }
 
@@ -188,11 +236,13 @@ private final class AgentRuntime: @unchecked Sendable {
     }
 }
 
-let logger = Logger(subsystem: "com.local.safari-history-sync.agent", category: "requests")
+let logger = Logger(subsystem: ProductIdentity.agentBundleIdentifier, category: "requests")
 let environment = ProcessInfo.processInfo.environment
 let home = FileManager.default.homeDirectoryForCurrentUser
 let runtimeDirectory = URL(fileURLWithPath: environment["SAFARI_SYNC_STATE_DIR"] ??
-    home.appendingPathComponent("Library/Application Support/Safari History Sync").path)
+    home.appendingPathComponent(
+        "Library/Application Support/\(ProductIdentity.applicationSupportDirectoryName)"
+    ).path)
 let historyURL = URL(fileURLWithPath: environment["SAFARI_SYNC_HISTORY_PATH"] ??
     home.appendingPathComponent("Library/Safari/History.db").path)
 let socketPath = environment["SAFARI_SYNC_SOCKET_PATH"] ??
@@ -257,11 +307,22 @@ do {
                             state: runtime.selectProfile(profileID),
                             profileID: profileID
                         ))
+                    } else if [
+                        RecoveryCommandPolicy.resetSafariCursor,
+                        RecoveryCommandPolicy.resetAgentState,
+                    ].contains(command.operation) {
+                        response = try JSONEncoder().encode(runtime.performRecovery(
+                            operation: command.operation,
+                            role: request.role
+                        ))
                     } else {
                         response = try JSONEncoder().encode(TypedError(code: "INVALID_OPERATION"))
                     }
                 }
                 try writeFrame(response, descriptor: client)
+            } catch let error as TypedError {
+                let response = try? JSONEncoder().encode(error)
+                if let response { try? writeFrame(response, descriptor: client) }
             } catch {
                 logger.error("Request failed: \(String(describing: error), privacy: .public)")
                 let response = try? JSONEncoder().encode(TypedError(code: "AGENT_ERROR", retryable: true))

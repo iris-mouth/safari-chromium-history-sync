@@ -12,7 +12,7 @@ Run checks before opening a PR:
 ./scripts/check.sh
 ```
 
-`./scripts/package-app.sh` creates ad-hoc-signed app bundles and an unsigned, payload-only PKG for local testing. Distribution builds additionally set `CODESIGN_IDENTITY`, `INSTALLER_IDENTITY`, and `NOTARY_PROFILE`. The PKG must continue to contain only the two sibling app bundles under `/Applications`; do not add installer scripts or user-specific Native Messaging files to it.
+`./scripts/package-app.sh` creates ad-hoc-signed app bundles and an unsigned, payload-only PKG for local testing. The PKG must continue to contain only the two sibling app bundles under `/Applications`; do not add installer scripts, store-distribution machinery, or user-specific Native Messaging files to it.
 
 ## Testing Safely
 

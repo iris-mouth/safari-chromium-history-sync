@@ -9,7 +9,7 @@ import {
   unseenVisitsAfterMarker,
 } from "./visit_resolution.js";
 
-const HOST = "com.local.safari_history_sync";
+const HOST = "io.github.irismouth.safari_chromium_history_sync";
 const RESOLVE_ALARM = "resolve-browser-history";
 const EXCHANGE_ALARM = "exchange-history";
 const RUNTIME_KEY = "browser_runtime_v1";

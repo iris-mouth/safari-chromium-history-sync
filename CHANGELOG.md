@@ -9,8 +9,13 @@
   no Native Messaging directory or manifest.
 - Simplified profile changes to an atomic active-profile switch while retaining
   pending delivery and recovery data under its originating profile.
-- Added a payload-only PKG that installs the signed Menu and Agent sibling apps
-  under `/Applications`, with optional Installer signing and PKG notarization.
+- Added a payload-only unsigned local PKG that installs the ad-hoc-signed Menu
+  and Agent sibling apps under `/Applications`.
+- Standardized bundle, package, Keychain, logger, Native Messaging, and runtime
+  identifiers under `io.github.irismouth`, and renamed the Agent bundle to
+  `Safari Chromium History Sync Agent.app` while retaining its executable name.
+- Added focused, Menu-authenticated recovery for Safari cursor identity/anchor
+  failures and unreadable sealed state without adding a generic repair command.
 - Documented that owner-only shared-key IPC and a fixed unpacked Extension ID do
   not establish trust against code already running as the current macOS user.
 - Qualified macOS 27.0 (26A428), Safari 22625.1.29.11.27, and its exact
@@ -22,7 +27,7 @@
 
 ## 6.0
 
-- Renamed the product and extension to Safari Chromium History Sync while retaining compatible internal identifiers and state paths.
+- Renamed the product and extension to Safari Chromium History Sync.
 - Replaced the Python multi-feature host with a Swift history-only installation containing a no-FDA Menu app, independent FDA-only Agent app, and no-FDA Native Messaging Bridge.
 - Added bidirectional new-visit sync for exactly one active Chrome Stable or Edge Stable profile.
 - Added immutable extension generations, monotonic streams, evidence-based Chromium delivery, encrypted recovery state, and a durable profile-switch FSM.

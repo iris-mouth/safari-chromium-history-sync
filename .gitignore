@@ -14,7 +14,7 @@ Bookmarks-*.plist
 *.pre-migrate
 
 # Runtime directory if SAFARI_SYNC_STATE_DIR points into the checkout.
-Safari Sync/
+Safari Chromium History Sync/
 
 # Personal one-off migration artifacts.
 migrate-preview.json
@@ -33,3 +33,4 @@ dist/
 
 # Local native messaging manifests if copied into the repo.
 com.local.safari_bookmark_sync.json
+io.github.irismouth.safari_chromium_history_sync.json
