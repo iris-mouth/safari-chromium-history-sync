@@ -23,12 +23,14 @@ for product in SafariSyncMenu SafariSyncBridge SafariSyncAgent; do
   swift build --disable-sandbox --package-path "$ROOT" -c release --product "$product"
 done
 rm -rf "$APP" "$AGENT_APP" "$LEGACY_APP" "$PKG"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/ChromiumExtension" "$AGENT_APP/Contents/MacOS"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/ChromiumExtension" "$AGENT_APP/Contents/MacOS" "$AGENT_APP/Contents/Resources"
 cp "$ROOT/.build/release/SafariSyncMenu" "$APP/Contents/MacOS/"
 cp "$ROOT/.build/release/SafariSyncBridge" "$APP/Contents/MacOS/"
 cp "$ROOT/.build/release/SafariSyncAgent" "$AGENT_APP/Contents/MacOS/"
 cp "$ROOT/Packaging/Info.plist" "$APP/Contents/Info.plist"
 cp "$ROOT/Packaging/Agent-Info.plist" "$AGENT_APP/Contents/Info.plist"
+cp "$ROOT/LICENSE" "$APP/Contents/Resources/LICENSE"
+cp "$ROOT/LICENSE" "$AGENT_APP/Contents/Resources/LICENSE"
 cp "$ROOT/manifest.json" "$ROOT/service_worker.js" "$APP/Contents/Resources/ChromiumExtension/"
 mkdir -p "$APP/Contents/Resources/ChromiumExtension/extension"
 for source in protocol.js sync_controller.js chrome_generation_store.js worker.js visit_resolution.js; do

@@ -1,6 +1,12 @@
 # Changelog
 
-## Unreleased
+## 6.0.0 prerelease — 2026-09-24
+
+- Published the first GitHub download as an unsigned Apple silicon PKG, with
+  SHA-256 verification and explicit runtime and distribution limitations.
+- Included the MIT license in both distributed app bundles.
+- Displayed browser profile labels and preserved page titles for new history
+  visits sent from Chrome or Edge to Safari.
 
 - Replaced manual `setup.sh`, `doctor.sh`, Extension-ID entry, profile-ID entry,
   and the ambiguous Enable Agent action with an app-driven setup and focused

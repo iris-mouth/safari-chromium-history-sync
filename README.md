@@ -4,6 +4,16 @@ Safari Chromium History Sync keeps **new** history visits synchronized in both d
 
 Version 6 is a history-only rewrite. It intentionally does not sync bookmarks, Reading List, tabs, tab groups, deletions, or old history. It does not use Chrome as an Edge hub. A Safari visit delivered to Chrome/Edge is a new delivery-time visit because Chromium cannot preserve an external visit timestamp.
 
+## Download
+
+[Download v6.0.0 and read the release notes](https://github.com/iris-mouth/safari-chromium-history-sync/releases/tag/v6.0.0).
+
+This is an **experimental prerelease for Apple silicon Macs**. The downloadable PKG requires **macOS 27.0 (26A428) and Safari 22625.1.29.11.27**; other OS/Safari builds are rejected, including updates that change the qualified history service. Intel binaries are not included.
+
+Download `Safari-Chromium-History-Sync-v6.0.0-arm64.pkg` and `SHA256SUMS.txt` into the same folder. To check the download, run `shasum -a 256 -c SHA256SUMS.txt` from that folder, then follow the installation steps below.
+
+The PKG is unsigned and the apps are ad-hoc signed, without Developer ID signing or Apple notarization. macOS may block installation or first launch. If you trust this release, follow [Apple's instructions for opening an app from an unidentified developer](https://support.apple.com/en-us/102445). This release has not been validated through a fresh download/install on a separate Mac.
+
 ## Safety and threat boundary
 
 The installation contains two app bundles and three separately signed executables:
@@ -36,7 +46,7 @@ The packaging script creates both standalone app bundles and a payload-only PKG 
 
 ## Install
 
-1. Install `Safari-Chromium-History-Sync.pkg`. For a local development build, you may instead move both generated app bundles beside each other in `/Applications`.
+1. Install the downloaded `Safari-Chromium-History-Sync-v6.0.0-arm64.pkg` (or `Safari-Chromium-History-Sync.pkg` from a local build). For a local development build, you may instead move both generated app bundles beside each other in `/Applications`.
 2. Open **Safari Chromium History Sync** and choose **Start Setup**.
 3. Select Chrome Stable, Edge Stable, or both. Setup writes a Native Messaging manifest only for browsers you explicitly select; it does not create files for an installed but unused browser.
 4. Setup opens each selected browser's extensions page and reveals the bundled `ChromiumExtension` folder. Turn on Developer mode, choose **Load unpacked**, and select that folder. Extension and profile IDs are detected automatically; there is nothing to copy and paste.
