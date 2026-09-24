@@ -4,6 +4,7 @@ import { createSyncController } from "./sync_controller.js";
 import {
   hasPendingImport,
   hasVisitNewerThan,
+  dirtyVisitDetails,
   importedVisitEvidence,
   orderedRecentVisits,
   unseenVisitsAfterMarker,
@@ -46,10 +47,10 @@ async function saveRuntime(state) {
   await chrome.storage.local.set({ [RUNTIME_KEY]: state });
 }
 
-async function markDirty(url) {
-  if (!isWebUrl(url)) return;
+async function markDirty(item) {
+  if (!isWebUrl(item?.url)) return;
   const state = await runtimeState();
-  state.dirtyUrls[url] = Date.now();
+  state.dirtyUrls[item.url] = dirtyVisitDetails(item);
   await saveRuntime(state);
 }
 
@@ -59,6 +60,8 @@ async function resolveDirtyVisits() {
     if (hasPendingImport(state.pendingEvidence, url)) continue;
     const visits = orderedRecentVisits(await chrome.history.getVisits({ url }));
     const marker = state.visitMarkers[url];
+    const dirty = state.dirtyUrls[url];
+    const title = dirty && typeof dirty === "object" ? dirty.title : undefined;
     const unseen = unseenVisitsAfterMarker(visits, marker);
     for (const visit of unseen.reverse()) {
       await controller.browserExchange({
@@ -69,6 +72,7 @@ async function resolveDirtyVisits() {
           eventId: crypto.randomUUID(),
           sourceKey: `${url}\n${visit.visitId}`,
           url,
+          ...(title ? { title } : {}),
           visitId: String(visit.visitId),
         }],
       });
@@ -212,7 +216,7 @@ async function exchange() {
 }
 
 chrome.history.onVisited.addListener((item) => {
-  exclusively(() => markDirty(item.url)).catch(console.error);
+  exclusively(() => markDirty(item)).catch(console.error);
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {

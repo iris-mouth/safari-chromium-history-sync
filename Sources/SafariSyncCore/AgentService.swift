@@ -59,6 +59,7 @@ public final class AgentService: @unchecked Sendable {
 
     private struct ObservedProfile: Sendable {
         var browserFamily: String
+        var displayName: String
         var extensionVersion: String?
         var lastSeen: Date
     }
@@ -109,7 +110,7 @@ public final class AgentService: @unchecked Sendable {
                     let receipt = try history.insertBrowserVisit(
                         eventID: event.eventID,
                         url: event.url,
-                        title: nil,
+                        title: event.title,
                         deliveredAt: .now
                     )
                     state.deliveredSafariVisitIDs.insert(receipt.visitID)
@@ -289,10 +290,14 @@ public final class AgentService: @unchecked Sendable {
         }
         if observedProfiles[message.profileID] == nil, observedProfiles.count >= 32 { return }
         let inferredFamily = message.profileID.split(separator: ":", maxSplits: 1).first.map(String.init)
+        let family = ["chrome", "edge"].contains(message.browserFamily ?? "")
+            ? message.browserFamily!
+            : inferredFamily ?? "chromium"
+        let existingName = observedProfiles[message.profileID]?.displayName
+        let familyOrdinal = observedProfiles.values.filter { $0.browserFamily == family }.count + 1
         observedProfiles[message.profileID] = ObservedProfile(
-            browserFamily: ["chrome", "edge"].contains(message.browserFamily ?? "")
-                ? message.browserFamily!
-                : inferredFamily ?? "chromium",
+            browserFamily: family,
+            displayName: existingName ?? "\(family.capitalized) profile \(familyOrdinal)",
             extensionVersion: message.extensionVersion,
             lastSeen: now
         )
@@ -326,6 +331,7 @@ public final class AgentService: @unchecked Sendable {
             return BrowserProfileDescriptor(
                 profileID: profileID,
                 browserFamily: observed.browserFamily,
+                displayName: observed.displayName,
                 extensionVersion: observed.extensionVersion,
                 lastSeen: observed.lastSeen,
                 active: profileID == activeProfileID

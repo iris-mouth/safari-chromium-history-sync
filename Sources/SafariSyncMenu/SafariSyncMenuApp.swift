@@ -214,7 +214,7 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
            let profile = health.connectedProfiles.first {
             do {
                 try await selectProfile(profile.profileID)
-                showMessage(title: "Setup complete", detail: "Connected \(profile.browserFamily) profile \(shortID(profile.profileID)).")
+                showMessage(title: "Setup complete", detail: "Connected \(profile.displayName).")
             } catch {
                 NSAlert(error: error).runModal()
             }
@@ -239,7 +239,7 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         alert.informativeText = "Pending history remains with its original profile when you switch."
         let popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 360, height: 28))
         for profile in health.connectedProfiles {
-            popup.addItem(withTitle: "\(profile.browserFamily.capitalized) · \(shortID(profile.profileID))")
+            popup.addItem(withTitle: profile.displayName)
         }
         if let active = health.connectedProfiles.firstIndex(where: \.active) { popup.selectItem(at: active) }
         alert.accessoryView = popup
@@ -250,7 +250,7 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Task {
             do {
                 try await selectProfile(profile.profileID)
-                showMessage(title: "Profile selected", detail: "Using \(profile.browserFamily) profile \(shortID(profile.profileID)).")
+                showMessage(title: "Profile selected", detail: "Using \(profile.displayName).")
                 await refreshStatusAsync()
             } catch {
                 NSAlert(error: error).runModal()
@@ -278,8 +278,8 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             } else if health.runtimeState == "blocked" {
                 healthItem.title = message(for: health.issueCode)
             } else if let active = health.activeProfileID,
-                      health.connectedProfiles.contains(where: { $0.profileID == active }) {
-                healthItem.title = "Active · \(shortID(active)) · recovery \(health.recoveryCount)"
+                      let profile = health.connectedProfiles.first(where: { $0.profileID == active }) {
+                healthItem.title = "Active · \(profile.displayName) · recovery \(health.recoveryCount)"
             } else if health.activeProfileID != nil {
                 healthItem.title = "Active profile disconnected · waiting for extension"
             } else if health.connectedProfiles.isEmpty {
@@ -436,7 +436,6 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         alert.runModal()
     }
 
-    private func shortID(_ value: String) -> String { String(value.suffix(8)) }
 }
 
 @main

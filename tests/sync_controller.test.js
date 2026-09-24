@@ -120,6 +120,29 @@ test("browserExchange deduplicates a retried source event", async () => {
   assert.equal((await sync.status()).pendingBrowserToSafari, 1);
 });
 
+test("browser-to-Safari queue preserves the page title", async () => {
+  const sync = createSyncController({ store: memoryStore() });
+  await sync.browserExchange({
+    version: 1,
+    operation: "publish",
+    profileId: "chrome:Default",
+    events: [{
+      eventId: "titled-event",
+      url: "https://example.com/titled",
+      title: "Readable page title",
+    }],
+  });
+  const page = await sync.browserExchange({
+    version: 1,
+    operation: "pull",
+    profileId: "chrome:Default",
+    stream: "browserToSafari",
+    afterSequence: 0,
+  });
+
+  assert.equal(page.events[0].title, "Readable page title");
+});
+
 test("status survives a controller restart through immutable Chrome generations", async () => {
   const values = {};
   const chromeStorage = {

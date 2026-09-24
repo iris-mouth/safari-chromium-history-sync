@@ -7,16 +7,18 @@ public struct SyncEvent: Codable, Equatable, Sendable {
     public let eventID: String
     public let sequence: Int64
     public let url: URL
+    public let title: String?
 
-    public init(eventID: String, sequence: Int64, url: URL) {
+    public init(eventID: String, sequence: Int64, url: URL, title: String? = nil) {
         self.eventID = eventID
         self.sequence = sequence
         self.url = url
+        self.title = title
     }
 
     enum CodingKeys: String, CodingKey {
         case eventID = "eventId"
-        case sequence, url
+        case sequence, url, title
     }
 }
 
@@ -45,6 +47,7 @@ public struct BrowserMessage: Codable, Sendable {
 public struct BrowserProfileDescriptor: Codable, Equatable, Sendable {
     public let profileID: String
     public let browserFamily: String
+    public let displayName: String
     public let extensionVersion: String?
     public let lastSeen: Date
     public let active: Bool
@@ -52,19 +55,21 @@ public struct BrowserProfileDescriptor: Codable, Equatable, Sendable {
     public init(
         profileID: String,
         browserFamily: String,
+        displayName: String,
         extensionVersion: String?,
         lastSeen: Date,
         active: Bool
     ) {
         self.profileID = profileID
         self.browserFamily = browserFamily
+        self.displayName = displayName
         self.extensionVersion = extensionVersion
         self.lastSeen = lastSeen
         self.active = active
     }
 
     enum CodingKeys: String, CodingKey {
-        case browserFamily, extensionVersion, lastSeen, active
+        case browserFamily, displayName, extensionVersion, lastSeen, active
         case profileID = "profileId"
     }
 }

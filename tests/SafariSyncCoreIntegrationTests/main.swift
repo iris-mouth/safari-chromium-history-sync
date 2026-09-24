@@ -22,6 +22,7 @@ struct SafariSyncCoreIntegrationTests {
         try validatesHistoryAccessAndSchema()
         try insertsOutboundVisitWithoutAcknowledgingICloud()
         try insertsDistinctOutboundVisits()
+        try preservesBrowserPageTitle()
         try sourceEventIsIdempotent()
         try observesProfilesWithoutActivatingThem()
         try boundsObservedProfiles()
@@ -107,6 +108,34 @@ struct SafariSyncCoreIntegrationTests {
         )
     }
 
+    static func preservesBrowserPageTitle() throws {
+        let fixture = try HistoryFixture()
+        let service = AgentService(
+            history: SafariHistoryStore(databaseURL: fixture.url, ledgerURL: fixture.ledgerURL),
+            stateURL: fixture.stateURL,
+            secret: Data(repeating: 19, count: 32)
+        )
+        _ = try service.selectProfile("chrome:title-test")
+        let publish = try JSONSerialization.data(withJSONObject: [
+            "version": 1,
+            "operation": "publish",
+            "stream": "browserToSafari",
+            "profileId": "chrome:title-test",
+            "events": [[
+                "eventId": "titled-event",
+                "sequence": 1,
+                "url": "https://example.com/titled",
+                "title": "Readable page title",
+            ]],
+        ])
+        _ = try service.browserExchange(publish)
+        try expect(
+            try fixture.scalarText("SELECT title FROM history_visits"),
+            "Readable page title",
+            "browser title is stored in Safari history"
+        )
+    }
+
     static func agentInterfacesPersistProfileAndExchangeState() throws {
         let fixture = try HistoryFixture()
         let history = SafariHistoryStore(databaseURL: fixture.url, ledgerURL: fixture.ledgerURL)
@@ -164,6 +193,7 @@ struct SafariSyncCoreIntegrationTests {
         let status = try service.status()
         try expect(status.activeProfileID, nil, "discovery does not select profile")
         try expect(status.connectedProfiles.map(\.profileID), ["chrome:Candidate"], "candidate is visible")
+        try expect(status.connectedProfiles.map(\.displayName), ["Chrome profile 1"], "profile has readable label")
     }
 
     static func recoveryOutcomeIsIdempotent() throws {
@@ -735,6 +765,17 @@ private final class HistoryFixture {
         defer { sqlite3_finalize(statement) }
         guard sqlite3_step(statement) == SQLITE_ROW else { throw FixtureError.query }
         return sqlite3_column_int64(statement, 0)
+    }
+
+    func scalarText(_ sql: String) throws -> String? {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw FixtureError.query
+        }
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_step(statement) == SQLITE_ROW else { throw FixtureError.query }
+        guard let bytes = sqlite3_column_text(statement, 0) else { return nil }
+        return String(cString: bytes)
     }
 
     func insertSafariVisit(url: String) throws {

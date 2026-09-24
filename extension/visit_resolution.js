@@ -7,6 +7,11 @@ export function orderedRecentVisits(visits) {
   return [...visits].sort(visitSort).slice(0, 64);
 }
 
+export function dirtyVisitDetails(item, detectedAt = Date.now()) {
+  const title = typeof item?.title === "string" ? item.title.trim().slice(0, 4096) : "";
+  return { detectedAt, ...(title ? { title } : {}) };
+}
+
 export function unseenVisitsAfterMarker(visits, marker) {
   const markerIndex = visits.findIndex((visit) => String(visit.visitId) === String(marker));
   return marker ? visits.slice(0, markerIndex < 0 ? 1 : markerIndex) : visits.slice(0, 1);

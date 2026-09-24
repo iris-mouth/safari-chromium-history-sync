@@ -112,6 +112,7 @@ export function createSyncController({ store }) {
         if (message.events.some((event) =>
           !event || typeof event.eventId !== "string" ||
           (event.sourceKey !== undefined && typeof event.sourceKey !== "string") ||
+          (event.title !== undefined && typeof event.title !== "string") ||
           !isWebUrl(event.url))) {
           return typedError("INVALID_EVENT");
         }
@@ -132,6 +133,7 @@ export function createSyncController({ store }) {
             acked: false,
           };
           if (event.sourceKey) queued.sourceKey = event.sourceKey;
+          if (event.title) queued.title = event.title;
           state.browserToSafari.push(queued);
           state.seenBrowserEventIds.push(eventKey);
           if (sourceKey) {

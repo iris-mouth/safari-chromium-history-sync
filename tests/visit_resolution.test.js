@@ -2,12 +2,20 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  dirtyVisitDetails,
   hasPendingImport,
   hasVisitNewerThan,
   importedVisitEvidence,
   orderedRecentVisits,
   unseenVisitsAfterMarker,
 } from "../extension/visit_resolution.js";
+
+test("a browser history notification keeps its page title", () => {
+  assert.deepEqual(
+    dirtyVisitDetails({ url: "https://example.com", title: "Example page" }, 1234),
+    { detectedAt: 1234, title: "Example page" },
+  );
+});
 
 test("a Safari-imported browser visit is not echoed back to Safari", () => {
   const pending = {
