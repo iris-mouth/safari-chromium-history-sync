@@ -52,7 +52,8 @@ struct SafariSyncCoreIntegrationTests {
 
     static func distinguishesTestEvidenceFromCompatibility() throws {
         let known = CompatibilityGate.referenceRuntime
-        try expect(try CompatibilityGate.assess(known).status, .compatibleUnverified, "revised release has no unearned tested label")
+        try expect(try CompatibilityGate.assess(known).status, .tested, "user-confirmed reference has a tested label")
+        try expect(try CompatibilityGate.assess(known, testedRuntimes: []).status, .compatibleUnverified, "no evidence means unverified")
         try expect(try CompatibilityGate.assess(known, testedRuntimes: [known]).status, .tested, "recorded evidence is separate")
         let eligible = [
             CompatibilityTuple(macOSVersion: "28.0.0", macOSBuild: "future-build",

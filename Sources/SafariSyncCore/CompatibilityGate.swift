@@ -40,9 +40,9 @@ public enum CompatibilityGate {
         historyServiceSHA256: "ab218c41abc06292969090580be6a3efa7e212595590df6e1e1328bfdec30b9a"
     )
 
-    // Populate only from end-to-end evidence for the revised release. Empty means
-    // eligible environments can run, but none claims release-level verification.
-    public static let testedRuntimes: [CompatibilityTuple] = []
+    // User-confirmed build-601 evidence: docs/validation/macos-27-build-601.md.
+    // This registry changes the evidence label, not runtime eligibility.
+    public static let testedRuntimes: [CompatibilityTuple] = [referenceRuntime]
 
     public static func assess(
         _ detected: CompatibilityTuple,

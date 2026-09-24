@@ -1,6 +1,6 @@
 # Safari Chromium History Sync v6.0.0 — Experimental prerelease
 
-**Draft — publication on hold.** Runtime eligibility now follows structural compatibility rather than an OS/Safari allowlist. The revised build still needs an installed-app/end-to-end check on the macOS 27 reference environment before publication and before claiming a tested label. Other compatible environments do not require individual verification to run. See the [compatibility policy](https://github.com/iris-mouth/safari-chromium-history-sync/blob/main/docs/COMPATIBILITY.md).
+The maintainer confirmed build 601 bidirectional synchronization and iPhone propagation on macOS 27.0 (26A428), Safari 22625.1.29.11.27. This is user-reported manual validation; see the [validation record](https://github.com/iris-mouth/safari-chromium-history-sync/blob/v6.0.0/docs/validation/macos-27-build-601.md) for its exact scope. Other environments can run when structural compatibility checks pass and are labeled unverified.
 
 Synchronize new history visits in both directions between Safari and one active Google Chrome Stable or Microsoft Edge Stable profile. Safari remains the iCloud path to iPhone and iPad.
 

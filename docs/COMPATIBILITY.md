@@ -45,7 +45,7 @@ The existing arrival-anchor, database-identity, idempotency, and delivery-eviden
 
 The development reference is macOS 27.0.0 (26A428), Safari 22625.1.29.11.27, with history-service SHA-256 `ab218c41abc06292969090580be6a3efa7e212595590df6e1e1328bfdec30b9a`. Historical code also recorded macOS 26.6.2 (25G83), Safari 21624.5.1.11.3. Neither historical record alone proves the revised build's end-to-end behavior.
 
-`CompatibilityGate.testedRuntimes` is currently empty because the revised build has not completed a new installed-app/end-to-end run. All eligible environments, including the reference Mac, therefore receive the honest compatible-unverified label. They can run. Adding a tested record changes the evidence label, not eligibility.
+`CompatibilityGate.testedRuntimes` contains the macOS 27 reference identity following the maintainer's explicit confirmation of build 601 bidirectional sync and iPhone propagation. See the [user-reported validation record](validation/macos-27-build-601.md); separate browser-version results and exhaustive restart/offline scenarios were not recorded. Other eligible environments run as compatible-unverified. Adding a tested record changes the evidence label, not eligibility.
 
 To record an environment as tested:
 
@@ -59,4 +59,4 @@ This procedure is for earning a tested label and checking the reference release.
 
 ## Current release status
 
-The revised code is tested against temporary databases and simulated runtime identities. The session could not directly access the live Safari DB, and no new installed-app/iPhone end-to-end test has been completed. Public release remains on hold for that reference-environment check and the separately pending repository-publication approval. The GitHub release remains a draft. Exhaustively testing all macOS/Safari versions is not a release requirement.
+The maintainer confirmed the reference-environment manual results and authorized publication on 2026-09-24. Automated tests and packaging checks supplement that user-reported evidence. Exhaustively testing all macOS/Safari versions is not a release requirement. The tested label is limited to the recorded reference identity and does not guarantee every Safari/iCloud behavior.

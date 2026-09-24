@@ -30,7 +30,7 @@ Compatibility is determined from runtime requirements, the structure of `history
 
 Structural checks compare columns, types, defaults, keys, constraints, and table properties using SQLite metadata. Cosmetic SQL changes, column order, and ordinary nonunique index changes are allowed. A matching structure does not guarantee unchanged Safari/iCloud behavior or confirm iCloud arrival. See [the compatibility policy](docs/COMPATIBILITY.md) for the precise supported conditions.
 
-The development reference is macOS 27.0 (26A428), Safari 22625.1.29.11.27. The revised build still needs an installed-app/end-to-end check before receiving a tested label; until then eligible environments are labeled compatible but unverified. Public release remains on hold for the reference-environment check, not for exhaustive testing of every OS version.
+The tested reference is macOS 27.0 (26A428), Safari 22625.1.29.11.27. The maintainer confirmed build 601 bidirectional synchronization and iPhone propagation; see the [user-reported validation record](docs/validation/macos-27-build-601.md) for scope and limitations. Other eligible environments run with the compatible-unverified label.
 
 ## Build
 

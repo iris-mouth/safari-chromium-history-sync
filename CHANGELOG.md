@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — structural compatibility
+## 6.0.0 prerelease — 2026-09-24
 
 - Advance both app bundle build numbers to 601 so the Menu restarts an older Agent.
 - Permit otherwise compatible environments without an OS/Safari version or binary
@@ -11,10 +11,9 @@
   values before writes; retain pending work when blocked.
 - Add tests for equivalent structures, rejected behavioral changes, metadata
   validation, and compatibility diagnostic serialization.
-- Keep the revised release's tested-environment records empty until a reference
-  installed-app/end-to-end check is completed. This does not prevent compatible use.
-
-## 6.0.0 prerelease — 2026-09-24
+- Record maintainer-confirmed build 601 bidirectional sync and iPhone propagation
+  on the macOS 27 reference environment; distinguish this user-reported result
+  from automated checks and unrecorded scenarios.
 
 - Prepared the first GitHub download as an unsigned Apple silicon PKG, with
   SHA-256 verification and explicit runtime and distribution limitations.
