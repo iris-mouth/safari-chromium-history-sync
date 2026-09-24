@@ -18,6 +18,8 @@ Run checks before opening a PR:
 
 Do not test new Safari write behavior against live Safari history first. The Swift integration executable creates an exact-schema temporary SQLite database and exercises the public Agent interfaces:
 
+The schema-only fixture in `tests/fixtures/safari-history-v1.sql` is captured evidence. Do not simplify its constraints to make tests pass or update the production fingerprint merely to accept a new OS. Follow [the compatibility qualification procedure](docs/COMPATIBILITY.md) when adding runtime identities or schema profiles. Retain existing qualified runtimes when adding new ones.
+
 Use copied files:
 
 ```sh

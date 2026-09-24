@@ -1,5 +1,7 @@
 # Safari Chromium History Sync v6.0.0 — Experimental prerelease
 
+**Draft — publication on hold.** The revised runtime registry and schema validation require an installed-app compatibility check and end-to-end run before release. See the [compatibility policy](https://github.com/iris-mouth/safari-chromium-history-sync/blob/main/docs/COMPATIBILITY.md). No additional OS versions have been enabled by this change.
+
 Synchronize new history visits in both directions between Safari and one active Google Chrome Stable or Microsoft Edge Stable profile. Safari remains the iCloud path to iPhone and iPad.
 
 ## Supported environment
@@ -27,6 +29,7 @@ The installer is unsigned; the apps are ad-hoc signed and are not Developer ID s
 - Profile-scoped pending deliveries and encrypted recovery state.
 - Focused recovery for a replaced Safari database or unreadable Agent state.
 - Payload-only PKG containing the two app bundles and their MIT license notices, without installer scripts.
+- An additive runtime registry and exact table/index/trigger schema validation, with a documented process for qualifying additional environments.
 
 ## Limitations
 

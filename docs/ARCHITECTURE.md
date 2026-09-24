@@ -62,11 +62,13 @@ After two unconfirmed delivery requests the browser reports `FINALIZED_UNCONFIRM
 
 ## Safari insertion and iCloud trigger
 
-The adapter validates the exact qualified schema before every session. Each insert:
+The Agent selects a schema profile from an additive registry of exact runtime identities; it never treats a matching layout as permission to run on an unknown runtime. Schema fingerprints include exact table, index, and trigger definitions rather than column names alone. See [COMPATIBILITY.md](COMPATIBILITY.md) for qualification evidence, scope, and future direction-specific support.
+
+The adapter checks the selected schema on history operations. Each new insert:
 
 1. records an Agent-owned `APPLYING` intent;
 2. opens `History.db` with a busy timeout;
-3. starts `BEGIN IMMEDIATE`;
+3. starts `BEGIN IMMEDIATE` and validates the schema while holding the write transaction;
 4. reconciles an existing exact URL/delivery-time visit after a crash;
 5. inserts with `origin=0` and generation `max(current,last_synced)+1`;
 6. updates `current_generation`, never `last_synced_generation`;

@@ -19,7 +19,10 @@ func expect<T: Equatable>(_ actual: T, _ expected: T, _ message: String) throws 
 
 struct SafariSyncCoreIntegrationTests {
     static func main() throws {
+        try qualifiesRuntimesIndependently()
         try validatesHistoryAccessAndSchema()
+        try rejectsSchemaDriftBeforeReadingOrWriting()
+        try rechecksSchemaInsideWriteTransaction()
         try insertsOutboundVisitWithoutAcknowledgingICloud()
         try insertsDistinctOutboundVisits()
         try preservesBrowserPageTitle()
@@ -44,10 +47,109 @@ struct SafariSyncCoreIntegrationTests {
         print("SafariSyncCoreIntegrationTests passed")
     }
 
+    static func qualifiesRuntimesIndependently() throws {
+        let existing = CompatibilityGate.qualifiedRuntimes
+        for entry in existing {
+            try expect(try CompatibilityGate.verify(entry.runtime, against: existing), entry, "qualified runtime")
+        }
+        let second = QualifiedRuntime(
+            runtime: CompatibilityTuple(
+                macOSVersion: "test-version", macOSBuild: "test-build",
+                safariBuild: "test-safari", historyServiceSHA256: "test-hash"
+            ),
+            schema: .historyV1
+        )
+        let expanded = existing + [second]
+        for entry in expanded {
+            try expect(try CompatibilityGate.verify(entry.runtime, against: expanded), entry, "additive registry")
+        }
+        let known = existing[0].runtime
+        let changes = [
+            CompatibilityTuple(macOSVersion: "unknown", macOSBuild: known.macOSBuild,
+                safariBuild: known.safariBuild, historyServiceSHA256: known.historyServiceSHA256),
+            CompatibilityTuple(macOSVersion: known.macOSVersion, macOSBuild: "unknown",
+                safariBuild: known.safariBuild, historyServiceSHA256: known.historyServiceSHA256),
+            CompatibilityTuple(macOSVersion: known.macOSVersion, macOSBuild: known.macOSBuild,
+                safariBuild: "unknown", historyServiceSHA256: known.historyServiceSHA256),
+            CompatibilityTuple(macOSVersion: known.macOSVersion, macOSBuild: known.macOSBuild,
+                safariBuild: known.safariBuild, historyServiceSHA256: "unknown"),
+            CompatibilityTuple(macOSVersion: "26.6.2", macOSBuild: "25G83",
+                safariBuild: "21624.5.1.11.3",
+                historyServiceSHA256: "d95ed7bb6e30f3bb024abc937155d5009cf1d14e7ba70c4222adc71a786be5f6"),
+        ]
+        for unknown in changes {
+            try expectSchemaRejection { _ = try CompatibilityGate.verify(unknown, against: existing) }
+        }
+        try expectSchemaRejection { _ = try CompatibilityGate.verify(known, against: []) }
+        try expectSchemaRejection { _ = try CompatibilityGate.verify(known, against: existing + existing) }
+    }
+
+    static func expectSchemaRejection(_ operation: () throws -> Void) throws {
+        do {
+            try operation()
+        } catch SafariHistoryError.incompatibleSchema {
+            return
+        }
+        throw IntegrationFailure.assertion("expected incompatible schema/runtime rejection")
+    }
+
     static func validatesHistoryAccessAndSchema() throws {
         let fixture = try HistoryFixture()
         let store = SafariHistoryStore(databaseURL: fixture.url, ledgerURL: fixture.ledgerURL)
         try store.validateAccessAndSchema()
+    }
+
+    static func rejectsSchemaDriftBeforeReadingOrWriting() throws {
+        let replacements = [
+            ("visit_count_score INTEGER NOT NULL", "visit_count_score REAL NOT NULL"),
+            ("daily_visit_counts BLOB NOT NULL", "daily_visit_counts BLOB NULL"),
+            ("load_successful BOOLEAN NOT NULL DEFAULT 1", "load_successful BOOLEAN NOT NULL DEFAULT 0"),
+            ("url TEXT NOT NULL UNIQUE", "url TEXT NOT NULL"),
+            ("ON DELETE CASCADE", "ON DELETE RESTRICT"),
+            ("id INTEGER PRIMARY KEY AUTOINCREMENT", "id INTEGER"),
+        ]
+        var mutations: [(String) -> String] = replacements.map { before, after in
+            { $0.replacingOccurrences(of: before, with: after) }
+        }
+        mutations += [
+            { $0 + "\nALTER TABLE history_visits ADD COLUMN unexpected TEXT;" },
+            { $0 + "\nALTER TABLE history_visits ADD COLUMN derived TEXT GENERATED ALWAYS AS (title) VIRTUAL;" },
+            { $0 + "\nDROP INDEX history_visits__origin;" },
+            { $0 + "\nCREATE INDEX unexpected_index ON history_visits(title);" },
+            { $0 + "\nCREATE TRIGGER unexpected_trigger AFTER INSERT ON history_visits BEGIN DELETE FROM metadata; END;" },
+            { $0 + "\nDROP TABLE history_visits;" },
+        ]
+        for mutate in mutations {
+            let fixture = try HistoryFixture(schemaTransform: mutate)
+            let store = SafariHistoryStore(databaseURL: fixture.url, ledgerURL: fixture.ledgerURL)
+            try expectSchemaRejection { try store.validateAccessAndSchema() }
+            try expectSchemaRejection { _ = try store.arrivalBaseline(authenticationKey: Data(repeating: 1, count: 32)) }
+            try expectSchemaRejection { _ = try store.needsCloudTrigger() }
+            try expectSchemaRejection {
+                _ = try store.insertBrowserVisit(
+                    eventID: "schema-drift", url: URL(string: "https://example.com/schema-drift")!,
+                    title: nil, deliveredAt: .now
+                )
+            }
+            try expect(try fixture.scalarInt("SELECT COUNT(*) FROM history_items"), 0, "schema rejection preserves history")
+            try expect(try fixture.scalarInt("SELECT value FROM metadata WHERE key = 'current_generation'"), 41, "schema rejection preserves generation")
+        }
+    }
+
+    static func rechecksSchemaInsideWriteTransaction() throws {
+        let fixture = try HistoryFixture()
+        let store = SafariHistoryStore(databaseURL: fixture.url, ledgerURL: fixture.ledgerURL)
+        let key = Data(repeating: 1, count: 32)
+        let cursor = try store.arrivalBaseline(authenticationKey: key)
+        try fixture.exec("CREATE INDEX unexpected_index ON history_visits(title)")
+        try expectSchemaRejection { _ = try store.newVisits(after: cursor, authenticationKey: key) }
+        try expectSchemaRejection {
+            _ = try store.insertBrowserVisit(eventID: "retry-schema", url: URL(string: "https://example.com/retry")!, title: nil, deliveredAt: .now)
+        }
+        try expect(try fixture.scalarInt("SELECT COUNT(*) FROM history_visits"), 0, "no writes after schema drift")
+        try fixture.exec("DROP INDEX unexpected_index")
+        _ = try store.insertBrowserVisit(eventID: "retry-schema", url: URL(string: "https://example.com/retry")!, title: nil, deliveredAt: .now)
+        try expect(try fixture.scalarInt("SELECT COUNT(*) FROM history_visits"), 1, "failed transaction rolls back and can retry")
     }
 
     static func insertsOutboundVisitWithoutAcknowledgingICloud() throws {
@@ -717,33 +819,17 @@ private final class HistoryFixture {
     let stateURL: URL
     private var db: OpaquePointer?
 
-    init() throws {
+    init(schemaTransform: (String) -> String = { $0 }) throws {
         url = FileManager.default.temporaryDirectory
             .appendingPathComponent("safari-sync-\(UUID().uuidString).db")
         ledgerURL = url.appendingPathExtension("ledger")
         stateURL = url.appendingPathExtension("state")
         guard sqlite3_open(url.path, &db) == SQLITE_OK else { throw FixtureError.open }
+        let schemaURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("fixtures/safari-history-v1.sql")
+        try exec(schemaTransform(try String(contentsOf: schemaURL, encoding: .utf8)))
         try exec("""
-          CREATE TABLE history_items (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, url TEXT UNIQUE NOT NULL,
-            domain_expansion TEXT, visit_count INTEGER NOT NULL DEFAULT 0,
-            daily_visit_counts BLOB, weekly_visit_counts BLOB,
-            autocomplete_triggers BLOB,
-            should_recompute_derived_visit_counts INTEGER NOT NULL DEFAULT 0,
-            visit_count_score REAL NOT NULL DEFAULT 0, status_code INTEGER NOT NULL DEFAULT 0
-          );
-          CREATE TABLE history_visits (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, history_item INTEGER NOT NULL,
-            visit_time REAL NOT NULL, title TEXT,
-            load_successful INTEGER NOT NULL DEFAULT 1,
-            http_non_get INTEGER NOT NULL DEFAULT 0,
-            synthesized INTEGER NOT NULL DEFAULT 0,
-            redirect_source INTEGER NULL UNIQUE,
-            redirect_destination INTEGER NULL UNIQUE,
-            origin INTEGER NOT NULL DEFAULT 0, generation INTEGER NOT NULL,
-            attributes INTEGER NOT NULL DEFAULT 0, score REAL NOT NULL DEFAULT 0
-          );
-          CREATE TABLE metadata (key TEXT PRIMARY KEY, value INTEGER NOT NULL);
           INSERT INTO metadata(key, value)
             VALUES ('current_generation', 41), ('last_synced_generation', 40);
         """)
@@ -781,15 +867,15 @@ private final class HistoryFixture {
     func insertSafariVisit(url: String) throws {
         let escaped = url.replacingOccurrences(of: "'", with: "''")
         try exec("""
-          INSERT INTO history_items(url, visit_count, should_recompute_derived_visit_counts)
-            VALUES ('\(escaped)', 1, 1);
+          INSERT INTO history_items(url, visit_count, daily_visit_counts, should_recompute_derived_visit_counts, visit_count_score)
+            VALUES ('\(escaped)', 1, X'', 1, 0);
           INSERT INTO history_visits(history_item, visit_time, title, origin, generation)
             VALUES (last_insert_rowid(), 900000000, '\(escaped)', 0, 42);
           UPDATE metadata SET value = 42 WHERE key = 'current_generation';
         """)
     }
 
-    private func exec(_ sql: String) throws {
+    func exec(_ sql: String) throws {
         guard sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK else { throw FixtureError.query }
     }
 

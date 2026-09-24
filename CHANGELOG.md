@@ -1,8 +1,19 @@
 # Changelog
 
+## Unreleased — compatibility qualification
+
+- Replaced the single runtime constant with an additive registry binding each
+  runtime identity to a schema profile; no additional OS versions are enabled.
+- Check exact table, index, and trigger definitions instead of column names
+  alone, and validate inside the Safari write transaction.
+- Replaced the simplified test schema with a data-free captured Safari schema
+  and added rejection tests for runtime and schema drift.
+- Documented qualification requirements and historical candidates. Publication
+  remains on hold pending installed-app validation of the stricter checks.
+
 ## 6.0.0 prerelease — 2026-09-24
 
-- Published the first GitHub download as an unsigned Apple silicon PKG, with
+- Prepared the first GitHub download as an unsigned Apple silicon PKG, with
   SHA-256 verification and explicit runtime and distribution limitations.
 - Included the MIT license in both distributed app bundles.
 - Displayed browser profile labels and preserved page titles for new history

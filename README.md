@@ -26,12 +26,16 @@ Bridge and Menu requests use role-bound HMAC authentication over a mode-`0600` U
 
 The design protects against accidental cross-profile delivery, browser-sandbox callers without the native host connection, corrupted input, unsupported Safari database layouts, and processes belonging to another macOS user. It does not claim to protect history from an attacker who already controls the current macOS account. The fixed unpacked-extension key makes its extension ID stable for Native Messaging configuration; it identifies the extension origin but does not prove that unpacked source is trustworthy.
 
-The writer fails closed outside the qualified tuple:
+Supported runtimes are stored in an additive registry. Each runtime must match its qualified database schema as well. The currently enabled baseline is:
 
 - macOS 27.0 (26A428)
 - Safari 22625.1.29.11.27
 - the qualified `com.apple.Safari.History` binary hash
 - the exact tested `history_items`, `history_visits`, and `metadata` schema
+
+The schema check covers exact table, index, and trigger definitions, including types, defaults, and constraints. Unknown environments stop both synchronization directions. Older qualification records are retained as candidates rather than automatically re-enabled. See [the compatibility policy and qualification procedure](docs/COMPATIBILITY.md) for the support matrix and the checks required to add another environment.
+
+The registry and stricter schema checks are undergoing release qualification. Public release remains on hold until the revised build passes an installed-app check and end-to-end verification on the target environment.
 
 ## Build
 

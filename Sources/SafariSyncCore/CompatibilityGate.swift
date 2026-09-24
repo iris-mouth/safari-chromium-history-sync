@@ -7,24 +7,55 @@ public struct CompatibilityTuple: Codable, Equatable, Sendable {
     public let macOSBuild: String
     public let safariBuild: String
     public let historyServiceSHA256: String
+
+    public init(macOSVersion: String, macOSBuild: String, safariBuild: String, historyServiceSHA256: String) {
+        self.macOSVersion = macOSVersion
+        self.macOSBuild = macOSBuild
+        self.safariBuild = safariBuild
+        self.historyServiceSHA256 = historyServiceSHA256
+    }
+}
+
+public struct QualifiedRuntime: Equatable, Sendable {
+    public let runtime: CompatibilityTuple
+    public let schema: SafariHistorySchema
+
+    public init(runtime: CompatibilityTuple, schema: SafariHistorySchema) {
+        self.runtime = runtime
+        self.schema = schema
+    }
 }
 
 public enum CompatibilityGate {
-    public static let qualified = CompatibilityTuple(
-        macOSVersion: "27.0.0",
-        macOSBuild: "26A428",
-        safariBuild: "22625.1.29.11.27",
-        historyServiceSHA256: "ab218c41abc06292969090580be6a3efa7e212595590df6e1e1328bfdec30b9a"
-    )
+    // Add independently qualified entries; do not replace older supported runtimes.
+    // Historical observations alone are not current-release qualification.
+    public static let qualifiedRuntimes: [QualifiedRuntime] = [
+        QualifiedRuntime(
+            runtime: CompatibilityTuple(
+                macOSVersion: "27.0.0",
+                macOSBuild: "26A428",
+                safariBuild: "22625.1.29.11.27",
+                historyServiceSHA256: "ab218c41abc06292969090580be6a3efa7e212595590df6e1e1328bfdec30b9a"
+            ),
+            schema: .historyV1
+        ),
+    ]
 
-    public static func verify() throws -> CompatibilityTuple {
-        let detected = try detect()
-        guard detected == qualified else {
+    public static func verify() throws -> QualifiedRuntime {
+        try verify(detect(), against: qualifiedRuntimes)
+    }
+
+    public static func verify(
+        _ detected: CompatibilityTuple,
+        against registry: [QualifiedRuntime]
+    ) throws -> QualifiedRuntime {
+        let matches = registry.filter { $0.runtime == detected }
+        guard matches.count == 1, let match = matches.first else {
             throw SafariHistoryError.incompatibleSchema(
-                "unqualified runtime: \(detected.macOSVersion)/\(detected.macOSBuild)/\(detected.safariBuild)"
+                "unqualified or ambiguous runtime: \(detected.macOSVersion)/\(detected.macOSBuild)/\(detected.safariBuild)"
             )
         }
-        return detected
+        return match
     }
 
     public static func detect() throws -> CompatibilityTuple {

@@ -25,8 +25,9 @@ private final class AgentRuntime: @unchecked Sendable {
             block("legacyWriterDetected")
             return
         }
+        let qualification: QualifiedRuntime
         do {
-            _ = try CompatibilityGate.verify()
+            qualification = try CompatibilityGate.verify()
         } catch {
             block(AgentIssueCode.runtimeUnsupported)
             return
@@ -42,7 +43,8 @@ private final class AgentRuntime: @unchecked Sendable {
 
         let history = SafariHistoryStore(
             databaseURL: historyURL,
-            ledgerURL: runtimeDirectory.appendingPathComponent("delivery-ledger.sqlite")
+            ledgerURL: runtimeDirectory.appendingPathComponent("delivery-ledger.sqlite"),
+            schema: qualification.schema
         )
         do {
             try history.validateAccessAndSchema()

@@ -53,10 +53,12 @@ public enum SafariHistoryError: Error, Equatable {
 public final class SafariHistoryStore: @unchecked Sendable {
     private let databaseURL: URL
     private let ledger: DeliveryLedger
+    private let schema: SafariHistorySchema
     private let lock = NSLock()
 
-    public init(databaseURL: URL, ledgerURL: URL? = nil) {
+    public init(databaseURL: URL, ledgerURL: URL? = nil, schema: SafariHistorySchema = .historyV1) {
         self.databaseURL = databaseURL
+        self.schema = schema
         let resolvedLedger = ledgerURL ?? databaseURL
             .deletingLastPathComponent()
             .appendingPathComponent("SafariSync-delivery-ledger.sqlite")
@@ -166,9 +168,10 @@ public final class SafariHistoryStore: @unchecked Sendable {
             )
             let db = try Connection(path: databaseURL.path)
             defer { db.close() }
-            try validateSchema(db)
             try db.exec("BEGIN IMMEDIATE")
             do {
+                // Hold the write transaction while checking the schema and inserting.
+                try validateSchema(db)
                 if let existing = try existingVisit(db, url: url.absoluteString, safariTime: safariTime) {
                     let generation = try generationForVisit(db, visitID: existing)
                     try db.exec("COMMIT")
@@ -240,25 +243,7 @@ public final class SafariHistoryStore: @unchecked Sendable {
     }
 
     private func validateSchema(_ db: Connection) throws {
-        let required: [String: Set<String>] = [
-            "history_items": [
-                "id", "url", "domain_expansion", "visit_count", "daily_visit_counts",
-                "weekly_visit_counts", "autocomplete_triggers",
-                "should_recompute_derived_visit_counts", "visit_count_score", "status_code",
-            ],
-            "history_visits": [
-                "id", "history_item", "visit_time", "title", "load_successful", "http_non_get",
-                "synthesized", "redirect_source", "redirect_destination", "origin", "generation",
-                "attributes", "score",
-            ],
-            "metadata": ["key", "value"],
-        ]
-        for (table, columns) in required {
-            let actual = try db.columns(table: table)
-            guard actual == columns else {
-                throw SafariHistoryError.incompatibleSchema("\(table) fingerprint mismatch")
-            }
-        }
+        try schema.validate(db)
     }
 
     private func validateAnchor(_ cursor: SafariArrivalCursor, db: Connection, key: Data) throws {
@@ -444,17 +429,6 @@ final class Connection {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(handle, sql, -1, &statement, nil) == SQLITE_OK else { throw error() }
         return statement
-    }
-    func columns(table: String) throws -> Set<String> {
-        let statement = try prepare("PRAGMA table_info(\(table))")
-        defer { sqlite3_finalize(statement) }
-        var result = Set<String>()
-        while sqlite3_step(statement) == SQLITE_ROW {
-            if let raw = sqlite3_column_text(statement, 1) {
-                result.insert(String(cString: raw))
-            }
-        }
-        return result
     }
     func error() -> SafariHistoryError {
         SafariHistoryError.sqlite(
