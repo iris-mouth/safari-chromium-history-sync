@@ -16,46 +16,50 @@ public struct CompatibilityTuple: Codable, Equatable, Sendable {
     }
 }
 
-public struct QualifiedRuntime: Equatable, Sendable {
-    public let runtime: CompatibilityTuple
-    public let schema: SafariHistorySchema
+public enum CompatibilityStatus: String, Codable, Sendable {
+    case tested
+    case compatibleUnverified
+}
 
-    public init(runtime: CompatibilityTuple, schema: SafariHistorySchema) {
-        self.runtime = runtime
-        self.schema = schema
+public struct RuntimeCompatibility: Codable, Equatable, Sendable {
+    public let runtime: CompatibilityTuple
+    public let status: CompatibilityStatus
+
+    public var summary: String {
+        switch status {
+        case .tested: "Compatible · tested environment"
+        case .compatibleUnverified: "Compatible · not end-to-end tested"
+        }
     }
 }
 
 public enum CompatibilityGate {
-    // Add independently qualified entries; do not replace older supported runtimes.
-    // Historical observations alone are not current-release qualification.
-    public static let qualifiedRuntimes: [QualifiedRuntime] = [
-        QualifiedRuntime(
-            runtime: CompatibilityTuple(
-                macOSVersion: "27.0.0",
-                macOSBuild: "26A428",
-                safariBuild: "22625.1.29.11.27",
-                historyServiceSHA256: "ab218c41abc06292969090580be6a3efa7e212595590df6e1e1328bfdec30b9a"
-            ),
-            schema: .historyV1
-        ),
-    ]
+    // Historical reference, not a restriction on other OS/Safari versions.
+    public static let referenceRuntime = CompatibilityTuple(
+        macOSVersion: "27.0.0", macOSBuild: "26A428", safariBuild: "22625.1.29.11.27",
+        historyServiceSHA256: "ab218c41abc06292969090580be6a3efa7e212595590df6e1e1328bfdec30b9a"
+    )
 
-    public static func verify() throws -> QualifiedRuntime {
-        try verify(detect(), against: qualifiedRuntimes)
-    }
+    // Populate only from end-to-end evidence for the revised release. Empty means
+    // eligible environments can run, but none claims release-level verification.
+    public static let testedRuntimes: [CompatibilityTuple] = []
 
-    public static func verify(
+    public static func assess(
         _ detected: CompatibilityTuple,
-        against registry: [QualifiedRuntime]
-    ) throws -> QualifiedRuntime {
-        let matches = registry.filter { $0.runtime == detected }
-        guard matches.count == 1, let match = matches.first else {
-            throw SafariHistoryError.incompatibleSchema(
-                "unqualified or ambiguous runtime: \(detected.macOSVersion)/\(detected.macOSBuild)/\(detected.safariBuild)"
-            )
+        testedRuntimes: [CompatibilityTuple] = testedRuntimes
+    ) throws -> RuntimeCompatibility {
+        let components = detected.macOSVersion.split(separator: ".", omittingEmptySubsequences: false)
+        let parts = components.compactMap { Int($0) }
+        guard components.count == 3, parts.count == 3, parts.allSatisfy({ $0 >= 0 }),
+              !parts.lexicographicallyPrecedes([26, 6, 2]),
+              !detected.safariBuild.isEmpty else {
+            throw SafariHistoryError.incompatibleSchema("minimum runtime requirements not met")
         }
-        return match
+        // This label must only be exposed after the live schema/state checks pass.
+        return RuntimeCompatibility(
+            runtime: detected,
+            status: testedRuntimes.contains(detected) ? .tested : .compatibleUnverified
+        )
     }
 
     public static func detect() throws -> CompatibilityTuple {
@@ -65,12 +69,12 @@ public enum CompatibilityGate {
             throw SafariHistoryError.databaseUnavailable("Safari Info.plist")
         }
         let historyService = URL(fileURLWithPath: "/System/Cryptexes/App/usr/libexec/com.apple.Safari.History")
-        let serviceData = try Data(contentsOf: historyService, options: .mappedIfSafe)
+        let serviceData = try? Data(contentsOf: historyService, options: .mappedIfSafe)
         return CompatibilityTuple(
             macOSVersion: "\(version.majorVersion).\(version.minorVersion).\(version.patchVersion)",
             macOSBuild: try systemString(name: "kern.osversion"),
             safariBuild: safariBuild,
-            historyServiceSHA256: SHA256.hash(data: serviceData).map { String(format: "%02x", $0) }.joined()
+            historyServiceSHA256: serviceData.map { SHA256.hash(data: $0).map { String(format: "%02x", $0) }.joined() } ?? "unavailable"
         )
     }
 

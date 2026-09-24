@@ -18,8 +18,8 @@ Do not attach those files publicly unless you have scrubbed them.
 - The no-FDA Bridge and Menu authenticate to the Agent over a mode-`0600` Unix socket using a random owner-only mode-`0600` IPC key.
 - Sensitive Agent state is sealed with AES-GCM using an Agent-only Keychain root secret; Bridge and Menu never access Keychain.
 - Safari history sync is intentionally narrow and insert-only.
-- Unknown OS, Safari, CloudHistory binary, and database-schema tuples fail closed.
-- Runtime support is additive and tied to exact table/index/trigger definitions; a schema match alone never enables an unqualified runtime. See [compatibility qualification](docs/COMPATIBILITY.md).
+- Incompatible runtime requirements, database structures, and sync-generation state fail closed. Unknown OS/Safari builds or binary hashes alone do not block use.
+- Tested and compatible-but-unverified environments are distinguished in diagnostics. Structural compatibility does not prove unchanged Safari/iCloud semantics. See [compatibility policy](docs/COMPATIBILITY.md).
 - Browser extension permissions are limited to history, storage, alarms, and native messaging.
 
 ## Reporting

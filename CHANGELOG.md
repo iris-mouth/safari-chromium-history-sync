@@ -1,15 +1,18 @@
 # Changelog
 
-## Unreleased — compatibility qualification
+## Unreleased — structural compatibility
 
-- Replaced the single runtime constant with an additive registry binding each
-  runtime identity to a schema profile; no additional OS versions are enabled.
-- Check exact table, index, and trigger definitions instead of column names
-  alone, and validate inside the Safari write transaction.
-- Replaced the simplified test schema with a data-free captured Safari schema
-  and added rejection tests for runtime and schema drift.
-- Documented qualification requirements and historical candidates. Publication
-  remains on hold pending installed-app validation of the stricter checks.
+- Advance both app bundle build numbers to 601 so the Menu restarts an older Agent.
+- Permit otherwise compatible environments without an OS/Safari version or binary
+  hash allowlist; show tested and compatible-but-unverified states separately.
+- Compare SQLite structural metadata instead of exact SQL text, permitting cosmetic
+  changes, reordered columns, and ordinary nonunique index changes.
+- Reject incompatible constraints, triggers, and invalid or overflowing generation
+  values before writes; retain pending work when blocked.
+- Add tests for equivalent structures, rejected behavioral changes, metadata
+  validation, and compatibility diagnostic serialization.
+- Keep the revised release's tested-environment records empty until a reference
+  installed-app/end-to-end check is completed. This does not prevent compatible use.
 
 ## 6.0.0 prerelease — 2026-09-24
 

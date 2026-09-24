@@ -25,9 +25,9 @@ private final class AgentRuntime: @unchecked Sendable {
             block("legacyWriterDetected")
             return
         }
-        let qualification: QualifiedRuntime
+        let compatibility: RuntimeCompatibility
         do {
-            qualification = try CompatibilityGate.verify()
+            compatibility = try CompatibilityGate.assess(CompatibilityGate.detect())
         } catch {
             block(AgentIssueCode.runtimeUnsupported)
             return
@@ -44,7 +44,7 @@ private final class AgentRuntime: @unchecked Sendable {
         let history = SafariHistoryStore(
             databaseURL: historyURL,
             ledgerURL: runtimeDirectory.appendingPathComponent("delivery-ledger.sqlite"),
-            schema: qualification.schema
+            schema: .historyV1
         )
         do {
             try history.validateAccessAndSchema()
@@ -60,7 +60,8 @@ private final class AgentRuntime: @unchecked Sendable {
             history: history,
             stateURL: runtimeDirectory.appendingPathComponent("state.sealed"),
             secret: stateSecret,
-            agentBuild: agentBuild
+            agentBuild: agentBuild,
+            compatibility: compatibility
         )
         let timer = makeCloudTrigger(history: history)
         let initialHealth = try? readyService.status()
@@ -208,6 +209,7 @@ private final class AgentRuntime: @unchecked Sendable {
             runtimeState: "blocked",
             issueCode: issue,
             agentBuild: agentBuild,
+            compatibility: status?.compatibility,
             connectedProfiles: status?.connectedProfiles ?? [],
             pendingBrowserToSafari: status?.pendingBrowserToSafari ?? 0,
             pendingSafariToBrowser: status?.pendingSafariToBrowser ?? 0,

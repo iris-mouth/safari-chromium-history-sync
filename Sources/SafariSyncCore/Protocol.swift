@@ -95,6 +95,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
     public let runtimeState: String
     public let issueCode: String?
     public let agentBuild: String?
+    public let compatibility: RuntimeCompatibility?
     public let connectedProfiles: [BrowserProfileDescriptor]
     public let pendingBrowserToSafari: Int
     public let pendingSafariToBrowser: Int
@@ -102,7 +103,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
     public let unrecoverableCount: Int
 
     enum CodingKeys: String, CodingKey {
-        case protocolVersion, enabled, runtimeState, issueCode, agentBuild, connectedProfiles
+        case protocolVersion, enabled, runtimeState, issueCode, agentBuild, connectedProfiles, compatibility
         case activeProfileID = "activeProfileId"
         case pendingBrowserToSafari, pendingSafariToBrowser
         case recoveryCount, unrecoverableCount
@@ -115,6 +116,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         runtimeState: String,
         issueCode: String? = nil,
         agentBuild: String? = nil,
+        compatibility: RuntimeCompatibility? = nil,
         connectedProfiles: [BrowserProfileDescriptor] = [],
         pendingBrowserToSafari: Int,
         pendingSafariToBrowser: Int,
@@ -127,6 +129,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         self.runtimeState = runtimeState
         self.issueCode = issueCode
         self.agentBuild = agentBuild
+        self.compatibility = compatibility
         self.connectedProfiles = connectedProfiles
         self.pendingBrowserToSafari = pendingBrowserToSafari
         self.pendingSafariToBrowser = pendingSafariToBrowser

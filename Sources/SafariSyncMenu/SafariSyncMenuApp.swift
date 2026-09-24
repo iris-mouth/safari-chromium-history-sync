@@ -8,6 +8,7 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let setupCoordinator = SetupCoordinator()
     private var statusItem: NSStatusItem?
     private var healthItem = NSMenuItem(title: "Checking status…", action: nil, keyEquivalent: "")
+    private var compatibilityItem = NSMenuItem(title: "Compatibility…", action: #selector(showCompatibility), keyEquivalent: "")
     private var profileItem = NSMenuItem(title: "Change Profile…", action: #selector(changeProfile), keyEquivalent: "")
     private var recoveryItem = NSMenuItem(title: "Resolve Sync Issue…", action: #selector(resolveBlockedIssue), keyEquivalent: "")
     private var browserCheckboxes: [SupportedBrowser: NSButton] = [:]
@@ -20,6 +21,7 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let menu = NSMenu()
         menu.delegate = self
         menu.addItem(healthItem)
+        menu.addItem(compatibilityItem)
         menu.addItem(profileItem)
         menu.addItem(recoveryItem)
         menu.addItem(.separator())
@@ -74,7 +76,7 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         let alert = NSAlert()
         alert.messageText = "Set up Safari Chromium History Sync"
-        alert.informativeText = "Choose only the browsers you want to sync. No settings are created for unselected browsers."
+        alert.informativeText = "Choose only the browsers you want to sync. No settings are created for unselected browsers.\n\n" + compatibilityDescription()
         alert.addButton(withTitle: "Start Setup")
         alert.addButton(withTitle: "Cancel")
         let stack = NSStackView()
@@ -271,6 +273,9 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 health = try await requestHealth()
             }
             latestHealth = health
+            compatibilityItem.title = health.issueCode == AgentIssueCode.runtimeUnsupported
+                ? "Compatibility checks failed…"
+                : (health.compatibility?.summary ?? "Compatibility not checked") + "…"
             profileItem.isHidden = health.connectedProfiles.isEmpty
             recoveryItem.isHidden = health.runtimeState != "blocked"
             if health.runtimeState == "initializing" {
@@ -289,6 +294,7 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
         } catch {
             latestHealth = nil
+            compatibilityItem.title = "Compatibility not checked…"
             profileItem.isHidden = true
             recoveryItem.isHidden = true
             healthItem.title = "Agent not connected"
@@ -341,7 +347,7 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 NSWorkspace.shared.open(url)
             }
         case AgentIssueCode.runtimeUnsupported:
-            alert.informativeText = "Sync stopped because the compatibility check failed. Install a qualified app update before resuming."
+            alert.informativeText = "Sync stopped because the runtime requirements, Safari database structure, or sync metadata are incompatible. Pending work is retained. An OS or Safari version change alone does not block sync. Check for an app update supporting the changed structure."
             alert.runModal()
         case AgentIssueCode.historyIdentityChanged, AgentIssueCode.historyAnchorInvalid:
             alert.informativeText = "Safari's history identity or saved arrival anchor changed. Resetting the Safari cursor starts scanning at the current Safari baseline. It preserves the active profile, pending outbox, recovery work, and delivery ledger."
@@ -387,6 +393,26 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func resolveBlockedIssue() {
         showBlockedIssue(latestHealth?.issueCode)
+    }
+
+    @objc private func showCompatibility() {
+        Task {
+            await refreshStatusAsync()
+            showMessage(title: "Compatibility", detail: compatibilityDescription())
+        }
+    }
+
+    private func compatibilityDescription() -> String {
+        guard let health = latestHealth else { return "Compatibility has not been checked. Connect the Agent to see its status." }
+        if health.issueCode == AgentIssueCode.runtimeUnsupported {
+            return "Compatibility checks failed. Sync is stopped and pending work is retained."
+        }
+        guard let compatibility = health.compatibility else { return "Compatibility has not been checked yet." }
+        let runtime = compatibility.runtime
+        let evidence = compatibility.status == .tested
+            ? "This environment has an end-to-end test record for this release."
+            : "Compatibility checks passed, but this release has not been end-to-end tested in this environment. Sync is permitted; iCloud arrival is not confirmed by the local checks."
+        return "macOS \(runtime.macOSVersion) (\(runtime.macOSBuild)) · Safari \(runtime.safariBuild)\n\n\(evidence)"
     }
 
     private func runRecoveryCommand(_ operation: String) async {

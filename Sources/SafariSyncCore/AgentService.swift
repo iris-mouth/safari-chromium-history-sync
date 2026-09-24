@@ -68,14 +68,16 @@ public final class AgentService: @unchecked Sendable {
     private let persistence: EncryptedStateStore<State>
     private let authenticationKey: Data
     private let agentBuild: String?
+    private let compatibility: RuntimeCompatibility?
     private let lock = NSLock()
     private var observedProfiles: [String: ObservedProfile] = [:]
 
-    public init(history: SafariHistoryStore, stateURL: URL, secret: Data, agentBuild: String? = nil) {
+    public init(history: SafariHistoryStore, stateURL: URL, secret: Data, agentBuild: String? = nil, compatibility: RuntimeCompatibility? = nil) {
         self.history = history
         self.persistence = EncryptedStateStore(url: stateURL, secret: secret)
         self.authenticationKey = secret
         self.agentBuild = agentBuild
+        self.compatibility = compatibility
     }
 
     public func browserExchange(_ data: Data) throws -> Data {
@@ -253,6 +255,7 @@ public final class AgentService: @unchecked Sendable {
                     runtimeState: "blocked",
                     issueCode: AgentIssueCode.stateUnreadable,
                     agentBuild: agentBuild,
+                    compatibility: compatibility,
                     connectedProfiles: descriptors(activeProfileID: nil),
                     pendingBrowserToSafari: 0,
                     pendingSafariToBrowser: 0,
@@ -265,6 +268,7 @@ public final class AgentService: @unchecked Sendable {
                 activeProfileID: state.activeProfileID,
                 runtimeState: "ready",
                 agentBuild: agentBuild,
+                compatibility: compatibility,
                 connectedProfiles: descriptors(activeProfileID: state.activeProfileID),
                 pendingBrowserToSafari: 0,
                 pendingSafariToBrowser: state.outbox.count,

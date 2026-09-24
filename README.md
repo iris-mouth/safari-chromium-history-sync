@@ -8,7 +8,7 @@ Version 6 is a history-only rewrite. It intentionally does not sync bookmarks, R
 
 [Download v6.0.0 and read the release notes](https://github.com/iris-mouth/safari-chromium-history-sync/releases/tag/v6.0.0).
 
-This is an **experimental prerelease for Apple silicon Macs**. The downloadable PKG requires **macOS 27.0 (26A428) and Safari 22625.1.29.11.27**; other OS/Safari builds are rejected, including updates that change the qualified history service. Intel binaries are not included.
+This is an **experimental prerelease for Apple silicon Macs**, requiring macOS 26.6.2 or later and a compatible Safari history database. OS/Safari version changes alone do not block synchronization. The app distinguishes **tested environments** from **compatible, unverified environments** in its Compatibility diagnostics. Intel binaries are not included.
 
 Download `Safari-Chromium-History-Sync-v6.0.0-arm64.pkg` and `SHA256SUMS.txt` into the same folder. To check the download, run `shasum -a 256 -c SHA256SUMS.txt` from that folder, then follow the installation steps below.
 
@@ -26,16 +26,11 @@ Bridge and Menu requests use role-bound HMAC authentication over a mode-`0600` U
 
 The design protects against accidental cross-profile delivery, browser-sandbox callers without the native host connection, corrupted input, unsupported Safari database layouts, and processes belonging to another macOS user. It does not claim to protect history from an attacker who already controls the current macOS account. The fixed unpacked-extension key makes its extension ID stable for Native Messaging configuration; it identifies the extension origin but does not prove that unpacked source is trustworthy.
 
-Supported runtimes are stored in an additive registry. Each runtime must match its qualified database schema as well. The currently enabled baseline is:
+Compatibility is determined from runtime requirements, the structure of `history_items`, `history_visits`, and `metadata`, and valid sync-generation values. Unknown version numbers or history-service hashes do not prevent an otherwise compatible environment from running. Incompatible structures or state stop both directions and retain pending work.
 
-- macOS 27.0 (26A428)
-- Safari 22625.1.29.11.27
-- the qualified `com.apple.Safari.History` binary hash
-- the exact tested `history_items`, `history_visits`, and `metadata` schema
+Structural checks compare columns, types, defaults, keys, constraints, and table properties using SQLite metadata. Cosmetic SQL changes, column order, and ordinary nonunique index changes are allowed. A matching structure does not guarantee unchanged Safari/iCloud behavior or confirm iCloud arrival. See [the compatibility policy](docs/COMPATIBILITY.md) for the precise supported conditions.
 
-The schema check covers exact table, index, and trigger definitions, including types, defaults, and constraints. Unknown environments stop both synchronization directions. Older qualification records are retained as candidates rather than automatically re-enabled. See [the compatibility policy and qualification procedure](docs/COMPATIBILITY.md) for the support matrix and the checks required to add another environment.
-
-The registry and stricter schema checks are undergoing release qualification. Public release remains on hold until the revised build passes an installed-app check and end-to-end verification on the target environment.
+The development reference is macOS 27.0 (26A428), Safari 22625.1.29.11.27. The revised build still needs an installed-app/end-to-end check before receiving a tested label; until then eligible environments are labeled compatible but unverified. Public release remains on hold for the reference-environment check, not for exhaustive testing of every OS version.
 
 ## Build
 

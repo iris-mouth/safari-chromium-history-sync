@@ -230,20 +230,41 @@ public final class SafariHistoryStore: @unchecked Sendable {
             let db = try Connection(path: databaseURL.path)
             defer { db.close() }
             try validateSchema(db)
-            let query = try db.prepare("""
-              SELECT
-                COALESCE(MAX(CASE WHEN key = 'current_generation' THEN CAST(value AS INTEGER) END), 0),
-                COALESCE(MAX(CASE WHEN key = 'last_synced_generation' THEN CAST(value AS INTEGER) END), 0)
-              FROM metadata
-              """)
-            defer { sqlite3_finalize(query) }
-            guard sqlite3_step(query) == SQLITE_ROW else { throw db.error() }
-            return sqlite3_column_int64(query, 0) > sqlite3_column_int64(query, 1)
+            let values = try generations(db)
+            return values.current > values.synced
         }
     }
 
     private func validateSchema(_ db: Connection) throws {
         try schema.validate(db)
+        _ = try generations(db)
+    }
+
+    private func generations(_ db: Connection) throws -> (current: Int64, synced: Int64) {
+        let statement = try db.prepare("""
+          SELECT key, value FROM metadata
+          WHERE key IN ('current_generation', 'last_synced_generation')
+          """)
+        defer { sqlite3_finalize(statement) }
+        var values: [String: Int64] = [:]
+        while true {
+            let result = sqlite3_step(statement)
+            if result == SQLITE_DONE { break }
+            guard result == SQLITE_ROW else { throw db.error() }
+            let type = sqlite3_column_type(statement, 1)
+            let raw = sqlite3_column_text(statement, 1)
+            let count = Int(sqlite3_column_bytes(statement, 1))
+            let text = raw.map { String(decoding: UnsafeBufferPointer(start: $0, count: count), as: UTF8.self) }
+            guard type == SQLITE_INTEGER || type == SQLITE_TEXT,
+                  let text, let value = Int64(text), value >= 0, value < Int64.max else {
+                throw SafariHistoryError.incompatibleSchema("invalid history generation")
+            }
+            values[columnText(statement, index: 0)] = value
+        }
+        guard let current = values["current_generation"], let synced = values["last_synced_generation"] else {
+            throw SafariHistoryError.incompatibleSchema("missing history generation")
+        }
+        return (current, synced)
     }
 
     private func validateAnchor(_ cursor: SafariArrivalCursor, db: Connection, key: Data) throws {
@@ -327,13 +348,8 @@ public final class SafariHistoryStore: @unchecked Sendable {
     }
 
     private func nextGeneration(_ db: Connection) throws -> Int64 {
-        let query = try db.prepare("""
-          SELECT MAX(CAST(value AS INTEGER)) FROM metadata
-          WHERE key IN ('current_generation', 'last_synced_generation')
-          """)
-        defer { sqlite3_finalize(query) }
-        guard sqlite3_step(query) == SQLITE_ROW else { throw db.error() }
-        let next = sqlite3_column_int64(query, 0) + 1
+        let values = try generations(db)
+        let next = max(values.current, values.synced) + 1
         let update = try db.prepare("""
           INSERT INTO metadata(key, value) VALUES ('current_generation', ?)
           ON CONFLICT(key) DO UPDATE SET value = excluded.value

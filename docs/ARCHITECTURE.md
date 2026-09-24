@@ -13,7 +13,7 @@ The extension implementation is in `extension/sync_controller.js`; the FDA imple
 The deep modules are:
 
 1. **Browser StateCoordinator** — a single-writer promise chain over immutable copy-on-write generations in `chrome.storage.local`.
-2. **Safari history adapter** — exact-schema validation, arrival cursors, crash reconciliation, and `BEGIN IMMEDIATE` inserts.
+2. **Safari history adapter** — structural compatibility validation, arrival cursors, crash reconciliation, and `BEGIN IMMEDIATE` inserts.
 3. **Agent service** — atomic active-profile selection, Safari arrival stream, profile-scoped encrypted outbox, and recovery ledger.
 4. **Local IPC adapter** — Native Messaging framing at the browser boundary and authenticated Unix-socket framing at the FDA boundary.
 5. **Setup coordinator** — browser opt-in, product-owned Native Messaging manifests, login-item state, Agent launch, and focused diagnostics; it runs in the no-FDA Menu process.
@@ -28,7 +28,7 @@ SafariSyncBridge — no FDA
         │ role + nonce + HMAC, Unix socket 0600
         ▼
 Safari Chromium History Sync Agent.app sibling process — FDA only
-        │ exact schema adapter
+        │ structural schema adapter
         ▼
 Safari History.db ── Safari CloudHistory ── iPhone Safari
 
@@ -62,7 +62,9 @@ After two unconfirmed delivery requests the browser reports `FINALIZED_UNCONFIRM
 
 ## Safari insertion and iCloud trigger
 
-The Agent selects a schema profile from an additive registry of exact runtime identities; it never treats a matching layout as permission to run on an unknown runtime. Schema fingerprints include exact table, index, and trigger definitions rather than column names alone. See [COMPATIBILITY.md](COMPATIBILITY.md) for qualification evidence, scope, and future direction-specific support.
+The Agent checks the minimum OS requirements and then the live database structure and generation values. Version/build identifiers and the optional history-service hash identify end-to-end test evidence; they are not an allowlist. Eligible unknown environments run as `compatibleUnverified`. A `tested` label requires an exact recorded environment for the revised release. Diagnostic labels are attached only after database checks pass.
+
+The schema adapter compares SQLite column, foreign-key, unique-index, and table metadata. It ignores DDL formatting, column order, and index names that do not change semantics, while rejecting unmodeled constraints and triggers. Generation values must be present, nonnegative integers within range. See [COMPATIBILITY.md](COMPATIBILITY.md) for the contract and remaining uncertainty.
 
 The adapter checks the selected schema on history operations. Each new insert:
 

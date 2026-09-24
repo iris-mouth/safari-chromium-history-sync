@@ -1,15 +1,15 @@
 # Safari Chromium History Sync v6.0.0 — Experimental prerelease
 
-**Draft — publication on hold.** The revised runtime registry and schema validation require an installed-app compatibility check and end-to-end run before release. See the [compatibility policy](https://github.com/iris-mouth/safari-chromium-history-sync/blob/main/docs/COMPATIBILITY.md). No additional OS versions have been enabled by this change.
+**Draft — publication on hold.** Runtime eligibility now follows structural compatibility rather than an OS/Safari allowlist. The revised build still needs an installed-app/end-to-end check on the macOS 27 reference environment before publication and before claiming a tested label. Other compatible environments do not require individual verification to run. See the [compatibility policy](https://github.com/iris-mouth/safari-chromium-history-sync/blob/main/docs/COMPATIBILITY.md).
 
 Synchronize new history visits in both directions between Safari and one active Google Chrome Stable or Microsoft Edge Stable profile. Safari remains the iCloud path to iPhone and iPad.
 
 ## Supported environment
 
 - Apple silicon (arm64); this download does not include Intel binaries.
-- macOS 27.0, build 26A428.
-- Safari build 22625.1.29.11.27.
-- The exact qualified Safari history service binary and database schema. Other OS/Safari builds are rejected; a system update can stop synchronization until that environment is qualified.
+- macOS 26.6.2 or later, with a structurally compatible Safari history database and valid sync metadata.
+- Tested and compatible-but-unverified environments are identified separately in Compatibility diagnostics. Unknown OS/Safari builds and history-service hashes do not block sync by themselves.
+- Structural compatibility does not guarantee unchanged Safari or iCloud behavior. A structure or state mismatch stops sync and retains pending work.
 
 ## Download and install
 
@@ -29,7 +29,7 @@ The installer is unsigned; the apps are ad-hoc signed and are not Developer ID s
 - Profile-scoped pending deliveries and encrypted recovery state.
 - Focused recovery for a replaced Safari database or unreadable Agent state.
 - Payload-only PKG containing the two app bundles and their MIT license notices, without installer scripts.
-- An additive runtime registry and exact table/index/trigger schema validation, with a documented process for qualifying additional environments.
+- Structural compatibility checks, generation-state validation, and separate diagnostic labels for tested and unverified environments.
 
 ## Limitations
 
@@ -42,7 +42,7 @@ The installer is unsigned; the apps are ad-hoc signed and are not Developer ID s
 
 ## Validation
 
-The release was checked on Apple silicon with Xcode 27.0 (27A266a) and the qualified macOS 27.0 environment. JavaScript tests and the Swift integration suite passed. Integration tests use temporary databases rather than live Safari history.
+The release was checked on Apple silicon with Xcode 27.0 (27A266a) and the macOS 27.0 development environment. JavaScript tests and the Swift integration suite passed. Integration tests use temporary databases rather than live Safari history.
 
 The generated PKG was expanded and verified to contain only the two app bundles, their arm64 executables and license notices, and no installer scripts. Both expanded apps passed strict code-signature verification. This verifies the ad-hoc signatures, not Developer ID trust or notarization.
 
