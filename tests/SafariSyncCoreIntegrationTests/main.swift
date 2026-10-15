@@ -19,6 +19,11 @@ func expect<T: Equatable>(_ actual: T, _ expected: T, _ message: String) throws 
 
 struct SafariSyncCoreIntegrationTests {
     static func main() throws {
+        if CommandLine.arguments.contains("--cloud-delivery") {
+            try CloudDeliveryTests.run()
+            print("CloudDeliveryTests passed")
+            return
+        }
         try distinguishesTestEvidenceFromCompatibility()
         try validatesHistoryAccessAndSchema()
         try acceptsEquivalentSchemaStructures()
@@ -47,12 +52,13 @@ struct SafariSyncCoreIntegrationTests {
         try slowIPCFrameHasTotalDeadline()
         try detectsLegacyManifest()
         try reconcilesOnlySelectedBrowserManifests()
+        try CloudDeliveryTests.run()
         print("SafariSyncCoreIntegrationTests passed")
     }
 
     static func distinguishesTestEvidenceFromCompatibility() throws {
         let known = CompatibilityGate.referenceRuntime
-        try expect(try CompatibilityGate.assess(known).status, .tested, "user-confirmed reference has a tested label")
+        try expect(try CompatibilityGate.assess(known).status, .compatibleUnverified, "new build awaits its own E2E evidence")
         try expect(try CompatibilityGate.assess(known, testedRuntimes: []).status, .compatibleUnverified, "no evidence means unverified")
         try expect(try CompatibilityGate.assess(known, testedRuntimes: [known]).status, .tested, "recorded evidence is separate")
         let eligible = [
@@ -693,7 +699,7 @@ struct SafariSyncCoreIntegrationTests {
         _ = try service.selectProfile("edge:Existing")
         let migratedBox = try AES.GCM.SealedBox(combined: Data(contentsOf: fixture.stateURL))
         let migrated = try JSONSerialization.jsonObject(with: AES.GCM.open(migratedBox, using: key)) as! [String: Any]
-        try expect(migrated["schemaVersion"] as? Int, 2, "migrated schema version")
+        try expect(migrated["schemaVersion"] as? Int, 3, "migrated schema version")
         try expect(migrated["stagingProfileID"] as? String, nil, "staging state removed")
     }
 
@@ -701,7 +707,7 @@ struct SafariSyncCoreIntegrationTests {
         let fixture = try HistoryFixture()
         let secret = Data(repeating: 12, count: 32)
         let future = try JSONSerialization.data(withJSONObject: [
-            "schemaVersion": 3,
+            "schemaVersion": 4,
             "enabled": true,
             "activeProfileID": "chrome:Future",
         ])
@@ -881,7 +887,7 @@ struct SafariSyncCoreIntegrationTests {
 
 try SafariSyncCoreIntegrationTests.main()
 
-private final class HistoryFixture {
+final class HistoryFixture {
     let url: URL
     let ledgerURL: URL
     let stateURL: URL

@@ -39,7 +39,7 @@ done
 
 SIGN_OPTIONS=(--force --options runtime --sign -)
 codesign "${SIGN_OPTIONS[@]}" "$APP/Contents/MacOS/SafariSyncBridge"
-codesign "${SIGN_OPTIONS[@]}" "$AGENT_APP"
+codesign "${SIGN_OPTIONS[@]}" --entitlements "$ROOT/Packaging/Agent.entitlements" "$AGENT_APP"
 codesign "${SIGN_OPTIONS[@]}" "$APP"
 codesign --verify --deep --strict --verbose=2 "$AGENT_APP"
 codesign --verify --deep --strict --verbose=2 "$APP"

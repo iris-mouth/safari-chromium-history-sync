@@ -1,5 +1,9 @@
 # Compatibility policy
 
+## Development build 612
+
+Build 610 has [user-reported iPhone Safari/Edge arrival](validation/build-610-arrival.md), following manual Safari navigation. [Build 611](validation/build-611-assist.md) has separate recovery and user-reported arrival evidence. Build 612 replaces the helper's daily ceiling and retry policy; its [validation record](validation/build-612-assist-retry.md) separates automatic checks, Mac native progress, and mobile observations. Its default `testedRuntimes` is empty; structurally eligible environments remain usable as compatible-unverified. The build-601 validation below is historical evidence for that implementation, not a qualification of the new scheduler, receipts, diagnostics, or replay behavior. No version/hash allowlist has been introduced.
+
 ## Eligibility and verification are separate
 
 The app can run on environments that meet its runtime, database-structure, and sync-state requirements without requiring every macOS/Safari version to be individually tested. OS version/build, Safari build, and history-service hash identify test evidence; an unknown identity alone does not block synchronization.
@@ -45,7 +49,7 @@ The existing arrival-anchor, database-identity, idempotency, and delivery-eviden
 
 The development reference is macOS 27.0.0 (26A428), Safari 22625.1.29.11.27, with history-service SHA-256 `ab218c41abc06292969090580be6a3efa7e212595590df6e1e1328bfdec30b9a`. Historical code also recorded macOS 26.6.2 (25G83), Safari 21624.5.1.11.3. Neither historical record alone proves the revised build's end-to-end behavior.
 
-`CompatibilityGate.testedRuntimes` contains the macOS 27 reference identity following the maintainer's explicit confirmation of build 601 bidirectional sync and iPhone propagation. See the [user-reported validation record](validation/macos-27-build-601.md); separate browser-version results and exhaustive restart/offline scenarios were not recorded. Other eligible environments run as compatible-unverified. Adding a tested record changes the evidence label, not eligibility.
+For build 601, `CompatibilityGate.testedRuntimes` contained the macOS 27 reference identity following the maintainer's explicit confirmation of bidirectional sync and iPhone propagation. See the [user-reported validation record](validation/macos-27-build-601.md); separate browser-version results and exhaustive restart/offline scenarios were not recorded. Build 610 currently has no tested entries. Adding a tested record changes the evidence label, not eligibility.
 
 To record an environment as tested:
 
@@ -57,6 +61,6 @@ To record an environment as tested:
 
 This procedure is for earning a tested label and checking the reference release. It is not a prerequisite for every compatible OS version to be usable.
 
-## Current release status
+## Published v6.0.0 release status
 
 The maintainer confirmed the reference-environment manual results and authorized publication on 2026-09-24. Automated tests and packaging checks supplement that user-reported evidence. Exhaustively testing all macOS/Safari versions is not a release requirement. The tested label is limited to the recorded reference identity and does not guarantee every Safari/iCloud behavior.

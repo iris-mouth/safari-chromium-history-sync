@@ -1,5 +1,39 @@
 # Changelog
 
+## 6.1.2 development / build 612 — unreleased
+
+- Replace Safari's six-attempt daily ceilings with shared, persisted launch/navigation retries: 5/10/20/40/60 minutes while checkpoints remain unchanged, capped at one attempt per hour without a daily stop.
+- Reset backoff on native progress or a resolved backlog followed by new visits; keep the five-minute minimum through restarts, crashes, permission failures, and feature toggles.
+- Migrate exhausted build-610/611 budgets automatically without resetting the last cooldown or the opted-in helper tab.
+- Alternate two owned control URLs in the same Safari tab so each attempt performs an ordinary navigation; exclude both from relay.
+- Show the next automatic attempt and keep observation scheduling independent of action backoff. Navigation acceptance remains distinct from native progress and receiving-device arrival.
+
+## 6.1.1 development / build 611 — unreleased
+
+- Record build 610 iPhone Safari and Edge arrival as user-reported evidence, separate from automatic qualification.
+- Add opt-in Safari Sync Assist using one reusable helper tab, normal navigation, durable cooldown/budget, and visible permission/failure state.
+- Keep slow Safari events outside the service lock; exclude the helper URL from relay to prevent feedback.
+- Preserve existing schema-3 journals with assist disabled until explicitly enabled.
+
+## 6.1.0 development / build 610 — unreleased
+
+- Persist relay-owned account-delivery obligations independently of local ACKs;
+  migrate Agent state schemas 1/2 to 3 without inferring historical cloud receipts.
+- Coalesce Safari writes and monitor exact rows/checkpoint progress, with durable
+  launch reservations, backoff, cooldown, and rolling launch limits.
+- Save browser insertion intents and exact evidence before writes/ACKs; recover
+  lost responses without duplicate visits and retain later real visits.
+- Add Account Sync & Arrival Checks with per-route probes, user-reported mobile
+  observations, bounded owned-URL Safari export comparison, replay plans, and
+  user-declared account binding changes.
+- Cancel removed owned work using deletion timestamps; never treat receiver
+  non-observation or a Safari checkpoint as proof of cloud arrival.
+- Bound transport payloads by bytes as well as events and page diagnostics.
+- Keep the new build compatible-unverified pending its own live E2E validation;
+  the build-601 manual result remains historical evidence. No live history or
+  account changes are part of the automated checks.
+- Older Agents cannot read schema 3; preserve state before an intentional rollback.
+
 ## 6.0.0 prerelease — 2026-09-24
 
 - Advance both app bundle build numbers to 601 so the Menu restarts an older Agent.

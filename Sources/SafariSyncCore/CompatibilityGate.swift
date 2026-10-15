@@ -42,7 +42,8 @@ public enum CompatibilityGate {
 
     // User-confirmed build-601 evidence: docs/validation/macos-27-build-601.md.
     // This registry changes the evidence label, not runtime eligibility.
-    public static let testedRuntimes: [CompatibilityTuple] = [referenceRuntime]
+    // Build 601's manual evidence does not qualify the new account-delivery coordinator.
+    public static let testedRuntimes: [CompatibilityTuple] = []
 
     public static func assess(
         _ detected: CompatibilityTuple,

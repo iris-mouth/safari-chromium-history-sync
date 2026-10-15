@@ -13,6 +13,7 @@ public struct DeliveryReceipt: Codable, Equatable, Sendable {
     public let visitID: Int64
     public let generation: Int64
     public let disposition: DeliveryDisposition
+    public let deliveredAt: Date
 }
 
 public struct SafariArrivalCursor: Codable, Equatable, Sendable {
@@ -158,7 +159,8 @@ public final class SafariHistoryStore: @unchecked Sendable {
                     eventID: eventID,
                     visitID: receipt.visitID,
                     generation: receipt.generation,
-                    disposition: .alreadyApplied
+                    disposition: .alreadyApplied,
+                    deliveredAt: Date(timeIntervalSinceReferenceDate: receipt.safariTime)
                 )
             }
 
@@ -180,7 +182,8 @@ public final class SafariHistoryStore: @unchecked Sendable {
                         eventID: eventID,
                         visitID: existing,
                         generation: generation,
-                        disposition: .alreadyApplied
+                        disposition: .alreadyApplied,
+                        deliveredAt: Date(timeIntervalSinceReferenceDate: safariTime)
                     )
                 }
 
@@ -216,7 +219,8 @@ public final class SafariHistoryStore: @unchecked Sendable {
                     eventID: eventID,
                     visitID: visitID,
                     generation: generation,
-                    disposition: .applied
+                    disposition: .applied,
+                    deliveredAt: Date(timeIntervalSinceReferenceDate: safariTime)
                 )
             } catch {
                 try? db.exec("ROLLBACK")
@@ -232,6 +236,37 @@ public final class SafariHistoryStore: @unchecked Sendable {
             try validateSchema(db)
             let values = try generations(db)
             return values.current > values.synced
+        }
+    }
+
+    public func cloudSnapshot(deliveries: [CloudDelivery]) throws -> SafariCloudSnapshot {
+        try lock.withLock {
+            let db = try Connection(path: databaseURL.path)
+            defer { db.close() }
+            try db.exec("BEGIN")
+            defer { try? db.exec("ROLLBACK") }
+            try validateSchema(db)
+            let checkpoint = try generations(db).synced
+            var matching = Set<String>()
+            for entry in deliveries {
+                guard let rawID = entry.destinationVisitID, let id = Int64(rawID),
+                      let time = entry.destinationTime, let generation = entry.generation else { continue }
+                let query = try db.prepare("""
+                  SELECT hi.url, hv.visit_time, hv.generation FROM history_visits hv
+                  JOIN history_items hi ON hi.id = hv.history_item WHERE hv.id = ?
+                  """)
+                defer { sqlite3_finalize(query) }
+                sqlite3_bind_int64(query, 1, id)
+                let result = sqlite3_step(query)
+                guard result == SQLITE_ROW || result == SQLITE_DONE else { throw db.error() }
+                if result == SQLITE_ROW, columnText(query, index: 0) == entry.url.absoluteString,
+                   abs(sqlite3_column_double(query, 1) - time.timeIntervalSinceReferenceDate) < 0.000001,
+                   sqlite3_column_int64(query, 2) == generation {
+                    matching.insert(rawID)
+                }
+            }
+            return SafariCloudSnapshot(databaseIdentity: try databaseIdentity(), checkpoint: checkpoint,
+                matchingVisitIDs: matching)
         }
     }
 
@@ -399,12 +434,12 @@ private final class DeliveryLedger {
         try stepDone(statement, db: db)
     }
 
-    func completed(eventID: String) throws -> (visitID: Int64, generation: Int64)? {
+    func completed(eventID: String) throws -> (visitID: Int64, generation: Int64, safariTime: Double)? {
         let db = try Connection(path: url.path, create: true)
         defer { db.close() }
         try create(db)
         let query = try db.prepare("""
-          SELECT visit_id, generation FROM deliveries
+          SELECT visit_id, generation, safari_time FROM deliveries
           WHERE event_id = ? AND state = 'APPLIED'
           """)
         defer { sqlite3_finalize(query) }
@@ -412,7 +447,7 @@ private final class DeliveryLedger {
         let result = sqlite3_step(query)
         if result == SQLITE_DONE { return nil }
         guard result == SQLITE_ROW else { throw db.error() }
-        return (sqlite3_column_int64(query, 0), sqlite3_column_int64(query, 1))
+        return (sqlite3_column_int64(query, 0), sqlite3_column_int64(query, 1), sqlite3_column_double(query, 2))
     }
 
     private func create(_ db: Connection) throws {

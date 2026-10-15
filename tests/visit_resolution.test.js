@@ -55,3 +55,14 @@ test("a real browser visit after an import remains outbound", () => {
     ["42"],
   );
 });
+
+test("an inbound account-synced visit is not mistaken for local addUrl evidence", () => {
+  const pending = { requestedAt: 10_000, preVisitIds: [] };
+  assert.equal(importedVisitEvidence([
+    { visitId: "remote", visitTime: 10_050, isLocal: false },
+  ], pending), null);
+  assert.equal(importedVisitEvidence([
+    { visitId: "remote", visitTime: 10_050, isLocal: false },
+    { visitId: "local", visitTime: 10_100, isLocal: true },
+  ], pending).visitId, "local");
+});

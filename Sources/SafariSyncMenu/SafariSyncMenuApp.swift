@@ -14,6 +14,7 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var browserCheckboxes: [SupportedBrowser: NSButton] = [:]
     private var setupStartButton: NSButton?
     private var latestHealth: HealthSnapshot?
+    private var cloudWindow: CloudDiagnosticsWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -26,6 +27,7 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(recoveryItem)
         menu.addItem(.separator())
         menu.addItem(withTitle: "Setup & Diagnostics…", action: #selector(showSetup), keyEquivalent: "")
+        menu.addItem(withTitle: "Account Sync & Arrival Checks…", action: #selector(showCloudDiagnostics), keyEquivalent: "")
         menu.addItem(withTitle: "Refresh Status", action: #selector(refreshStatus), keyEquivalent: "r")
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit Menu (Sync Continues)", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
@@ -55,6 +57,11 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 await refreshStatusAsync()
             }
         }
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag { showCloudDiagnostics() }
+        return true
     }
 
     func menuWillOpen(_ menu: NSMenu) {
@@ -284,7 +291,8 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 healthItem.title = message(for: health.issueCode)
             } else if let active = health.activeProfileID,
                       let profile = health.connectedProfiles.first(where: { $0.profileID == active }) {
-                healthItem.title = "Active · \(profile.displayName) · recovery \(health.recoveryCount)"
+                let waiting = health.cloud.map { " · Safari waiting \($0.safariPending) · receiver confirmed \($0.remoteSeen)" } ?? ""
+                healthItem.title = "Active · \(profile.displayName) · recovery \(health.recoveryCount)\(waiting)"
             } else if health.activeProfileID != nil {
                 healthItem.title = "Active profile disconnected · waiting for extension"
             } else if health.connectedProfiles.isEmpty {
@@ -304,6 +312,30 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func requestHealth() async throws -> HealthSnapshot {
         let response = try await requestAsync(MenuCommand(operation: "status"))
         return try JSONDecoder().decode(HealthSnapshot.self, from: response)
+    }
+
+    @objc private func showCloudDiagnostics() {
+        Task { [self] in
+            do {
+                let health = try await requestHealth()
+                guard health.runtimeState == "ready", let profile = health.activeProfileID else {
+                    showMessage(title: "Account sync unavailable", detail: "Resolve the current sync issue and select an active browser profile first.")
+                    return
+                }
+                if cloudWindow?.profileID != profile {
+                    cloudWindow?.close()
+                    cloudWindow = CloudDiagnosticsWindow(profileID: profile) { [weak self] command in
+                        guard let self else { throw TypedError(code: "MENU_UNAVAILABLE") }
+                        return try await self.requestAsync(command)
+                    }
+                }
+                cloudWindow?.showWindow(nil)
+                NSApp.activate(ignoringOtherApps: true)
+                cloudWindow?.refresh()
+            } catch {
+                showMessage(title: "Agent unavailable", detail: "Refresh Status or run Setup & Diagnostics, then reopen Account Sync.")
+            }
+        }
     }
 
     private func selectProfile(_ profileID: String) async throws {

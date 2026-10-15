@@ -24,7 +24,8 @@ export function hasPendingImport(pendingEvidence, url) {
 export function importedVisitEvidence(visits, pending) {
   const before = new Set(pending.preVisitIds);
   const candidates = visits.filter((visit) =>
-    !before.has(String(visit.visitId)) && visit.visitTime >= pending.requestedAt - 1_000);
+    visit.isLocal !== false && !before.has(String(visit.visitId))
+      && visit.visitTime >= pending.requestedAt - 1_000);
   return candidates.sort((a, b) => -visitSort(a, b))[0] ?? null;
 }
 

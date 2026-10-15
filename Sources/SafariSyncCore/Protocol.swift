@@ -35,9 +35,15 @@ public struct BrowserMessage: Codable, Sendable {
     public let outcome: String?
     public let browserFamily: String?
     public let extensionVersion: String?
+    public let capabilities: [String]?
+    public let localReceipts: [BrowserLocalReceipt]?
+    public let removedURLs: [String]?
+    public let allHistoryRemoved: Bool?
+    public let removedAt: Double?
 
     enum CodingKeys: String, CodingKey {
         case version, operation, events, limit, stream, outcome, browserFamily, extensionVersion
+        case capabilities, localReceipts, removedURLs, allHistoryRemoved, removedAt
         case eventID = "eventId"
         case profileID = "profileId"
         case afterSequence, throughSequence
@@ -101,12 +107,13 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
     public let pendingSafariToBrowser: Int
     public let recoveryCount: Int
     public let unrecoverableCount: Int
+    public let cloud: CloudSummary?
 
     enum CodingKeys: String, CodingKey {
         case protocolVersion, enabled, runtimeState, issueCode, agentBuild, connectedProfiles, compatibility
         case activeProfileID = "activeProfileId"
         case pendingBrowserToSafari, pendingSafariToBrowser
-        case recoveryCount, unrecoverableCount
+        case recoveryCount, unrecoverableCount, cloud
     }
 
     public init(
@@ -121,7 +128,8 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         pendingBrowserToSafari: Int,
         pendingSafariToBrowser: Int,
         recoveryCount: Int,
-        unrecoverableCount: Int
+        unrecoverableCount: Int,
+        cloud: CloudSummary? = nil
     ) {
         self.protocolVersion = protocolVersion
         self.enabled = enabled
@@ -135,20 +143,35 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         self.pendingSafariToBrowser = pendingSafariToBrowser
         self.recoveryCount = recoveryCount
         self.unrecoverableCount = unrecoverableCount
+        self.cloud = cloud
     }
 }
 
 public struct MenuCommand: Codable, Sendable {
     public let operation: String
     public let profileID: String?
+    public let provider: CloudProvider?
+    public let deliveryID: String?
+    public let planID: String?
+    public let result: String?
+    public let device: String?
+    public let snapshotJSON: String?
 
-    public init(operation: String, profileID: String? = nil) {
+    public init(operation: String, profileID: String? = nil, provider: CloudProvider? = nil,
+                deliveryID: String? = nil, planID: String? = nil, result: String? = nil,
+                device: String? = nil, snapshotJSON: String? = nil) {
         self.operation = operation
         self.profileID = profileID
+        self.provider = provider
+        self.deliveryID = deliveryID
+        self.planID = planID
+        self.result = result
+        self.device = device
+        self.snapshotJSON = snapshotJSON
     }
 
     enum CodingKeys: String, CodingKey {
-        case operation
+        case operation, provider, deliveryID, planID, result, device, snapshotJSON
         case profileID = "profileId"
     }
 }
@@ -180,7 +203,7 @@ public struct RecoveryCommandStatus: Codable, Equatable, Sendable {
 
 public enum ExchangeResponse: Encodable, Sendable {
     case receipt(status: String, throughSequence: Int64? = nil)
-    case page(stream: String, events: [SyncEvent], hasMore: Bool)
+    case page(stream: String, events: [SyncEvent], hasMore: Bool, capabilities: [String]? = nil)
     case failure(TypedError)
 
     public func encode(to encoder: Encoder) throws {
@@ -190,11 +213,12 @@ public enum ExchangeResponse: Encodable, Sendable {
             try container.encode("receipt", forKey: DynamicKey("type"))
             try container.encode(status, forKey: DynamicKey("status"))
             try container.encodeIfPresent(throughSequence, forKey: DynamicKey("throughSequence"))
-        case let .page(stream, events, hasMore):
+        case let .page(stream, events, hasMore, capabilities):
             try container.encode("page", forKey: DynamicKey("type"))
             try container.encode(stream, forKey: DynamicKey("stream"))
             try container.encode(events, forKey: DynamicKey("events"))
             try container.encode(hasMore, forKey: DynamicKey("hasMore"))
+            try container.encodeIfPresent(capabilities, forKey: DynamicKey("capabilities"))
         case let .failure(error):
             try error.encode(to: encoder)
         }

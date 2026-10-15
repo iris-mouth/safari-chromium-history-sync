@@ -1,4 +1,5 @@
 import Darwin
+import AppKit
 import Foundation
 import os
 import SafariSyncCore
@@ -63,7 +64,7 @@ private final class AgentRuntime: @unchecked Sendable {
             agentBuild: agentBuild,
             compatibility: compatibility
         )
-        let timer = makeCloudTrigger(history: history)
+        let timer = makeCloudTrigger(service: readyService)
         let initialHealth = try? readyService.status()
         lock.withLock {
             service = readyService
@@ -119,6 +120,8 @@ private final class AgentRuntime: @unchecked Sendable {
         }
         do {
             return try service.browserExchange(body)
+        } catch let error as TypedError {
+            return try JSONEncoder().encode(error)
         } catch let error as SafariHistoryError {
             if error.isTransientContention {
                 return try JSONEncoder().encode(TypedError(code: "SAFARI_BUSY", retryable: true))
@@ -214,30 +217,58 @@ private final class AgentRuntime: @unchecked Sendable {
             pendingBrowserToSafari: status?.pendingBrowserToSafari ?? 0,
             pendingSafariToBrowser: status?.pendingSafariToBrowser ?? 0,
             recoveryCount: status?.recoveryCount ?? 0,
-            unrecoverableCount: status?.unrecoverableCount ?? 0
+            unrecoverableCount: status?.unrecoverableCount ?? 0,
+            cloud: status?.cloud
         )
     }
 
-    private func makeCloudTrigger(history: SafariHistoryStore) -> DispatchSourceTimer {
+    func cloudCommand(_ command: MenuCommand) throws -> CloudDiagnostics {
+        guard let service = lock.withLock({ runtimeState == "ready" ? service : nil }) else {
+            throw TypedError(code: lock.withLock { issueCode } ?? "AGENT_INITIALIZING")
+        }
+        do { return try service.cloudCommand(command) }
+        catch let error as SafariHistoryError {
+            if !error.isTransientContention { block(issue(for: error)) }
+            throw error
+        }
+    }
+
+    private func makeCloudTrigger(service: AgentService) -> DispatchSourceTimer {
         let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
-        let now = Date().timeIntervalSince1970
-        let nextBoundary = (floor(now / 300) + 1) * 300
-        timer.schedule(deadline: .now() + (nextBoundary - now), repeating: 300)
-        timer.setEventHandler {
-            guard (try? history.needsCloudTrigger()) == true else { return }
-            let check = Process()
-            check.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
-            check.arguments = ["-x", "Safari"]
-            try? check.run()
-            check.waitUntilExit()
-            guard check.terminationStatus != 0 else { return }
-            let launch = Process()
-            launch.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-            launch.arguments = ["-gj", "-a", "Safari"]
-            try? launch.run()
+        timer.schedule(deadline: .now() + 15, repeating: 15, leeway: .seconds(1))
+        timer.setEventHandler { [weak self] in
+            guard let self, self.lock.withLock({ self.runtimeState == "ready" }) else { return }
+            do {
+                try service.pollCloud(safariIsRunning: !NSRunningApplication
+                    .runningApplications(withBundleIdentifier: "com.apple.Safari").isEmpty,
+                    assistSafari: SafariSyncAssistDriver.perform) {
+                    // Never quit/recycle a running user-owned Safari process.
+                    guard NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.Safari").isEmpty else {
+                        return false
+                    }
+                    let launch = Process()
+                    launch.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+                    launch.arguments = ["-gj", "-a", "Safari"]
+                    try launch.run()
+                    let deadline = ProcessInfo.processInfo.systemUptime + 5
+                    while launch.isRunning && ProcessInfo.processInfo.systemUptime < deadline {
+                        Thread.sleep(forTimeInterval: 0.02)
+                    }
+                    if launch.isRunning { launch.terminate(); return false }
+                    return launch.terminationStatus == 0
+                }
+            } catch let error as SafariHistoryError {
+                if !error.isTransientContention { self.block(self.issue(for: error)) }
+            } catch {
+                self.block(AgentIssueCode.stateUnreadable)
+            }
         }
         return timer
     }
+}
+
+if CommandLine.arguments.contains("--validate-safari-assist-script") {
+    exit(SafariSyncAssistDriver.validate() ? 0 : 1)
 }
 
 let logger = Logger(subsystem: ProductIdentity.agentBundleIdentifier, category: "requests")
@@ -282,58 +313,68 @@ do {
     )
     DispatchQueue.global(qos: .userInitiated).async { runtime.initialize() }
 
-    var seenNonces = Set<String>()
-    while true {
-        let client = accept(server, nil, nil)
-        if client < 0 { continue }
-        configureSocketTimeouts(descriptor: client)
-        autoreleasepool {
-            defer { Darwin.close(client) }
-            do {
-                let framed = try readFrame(descriptor: client)
-                let request = try JSONDecoder().decode(AuthenticatedRequest.self, from: framed)
-                guard ["bridge", "menu"].contains(request.role),
-                      !seenNonces.contains(request.nonce),
-                      SharedSecret.verify(request, secret: ipcSecret) else {
-                    throw IPCError.authenticationFailed
-                }
-                seenNonces.insert(request.nonce)
-                if seenNonces.count > 4_096 { seenNonces.removeAll(keepingCapacity: true) }
-                let response: Data
-                if request.role == "bridge" {
-                    response = try runtime.browserExchange(request.body)
-                } else {
-                    let command = try JSONDecoder().decode(MenuCommand.self, from: request.body)
-                    if command.operation == "status" {
-                        response = try JSONEncoder().encode(runtime.health())
-                    } else if command.operation == "selectProfile", let profileID = command.profileID {
-                        response = try JSONEncoder().encode(ProfileSwitchStatus(
-                            state: runtime.selectProfile(profileID),
-                            profileID: profileID
-                        ))
-                    } else if [
-                        RecoveryCommandPolicy.resetSafariCursor,
-                        RecoveryCommandPolicy.resetAgentState,
-                    ].contains(command.operation) {
-                        response = try JSONEncoder().encode(runtime.performRecovery(
-                            operation: command.operation,
-                            role: request.role
-                        ))
-                    } else {
-                        response = try JSONEncoder().encode(TypedError(code: "INVALID_OPERATION"))
+    DispatchQueue(label: "io.github.irismouth.history-sync.ipc").async {
+        var seenNonces = Set<String>()
+        while true {
+            let client = accept(server, nil, nil)
+            if client < 0 { continue }
+            configureSocketTimeouts(descriptor: client)
+            autoreleasepool {
+                defer { Darwin.close(client) }
+                do {
+                    let framed = try readFrame(descriptor: client)
+                    let request = try JSONDecoder().decode(AuthenticatedRequest.self, from: framed)
+                    guard ["bridge", "menu"].contains(request.role),
+                          !seenNonces.contains(request.nonce),
+                          SharedSecret.verify(request, secret: ipcSecret) else {
+                        throw IPCError.authenticationFailed
                     }
+                    seenNonces.insert(request.nonce)
+                    if seenNonces.count > 4_096 { seenNonces.removeAll(keepingCapacity: true) }
+                    let response: Data
+                    if request.role == "bridge" {
+                        response = try runtime.browserExchange(request.body)
+                    } else {
+                        let command = try JSONDecoder().decode(MenuCommand.self, from: request.body)
+                        if command.operation == "status" {
+                            response = try JSONEncoder().encode(runtime.health())
+                        } else if command.operation == "selectProfile", let profileID = command.profileID {
+                            response = try JSONEncoder().encode(ProfileSwitchStatus(
+                                state: runtime.selectProfile(profileID),
+                                profileID: profileID
+                            ))
+                        } else if [
+                            "cloudStatus", "cloudProbe", "cloudObserve", "cloudPrepareReplay",
+                            "cloudExecuteReplay", "cloudCompareExport", "cloudRebind", "cloudSafariAssist",
+                        ].contains(command.operation) {
+                            response = try JSONEncoder().encode(runtime.cloudCommand(command))
+                        } else if [
+                            RecoveryCommandPolicy.resetSafariCursor,
+                            RecoveryCommandPolicy.resetAgentState,
+                        ].contains(command.operation) {
+                            response = try JSONEncoder().encode(runtime.performRecovery(
+                                operation: command.operation,
+                                role: request.role
+                            ))
+                        } else {
+                            response = try JSONEncoder().encode(TypedError(code: "INVALID_OPERATION"))
+                        }
+                    }
+                    try writeFrame(response, descriptor: client)
+                } catch let error as TypedError {
+                    let response = try? JSONEncoder().encode(error)
+                    if let response { try? writeFrame(response, descriptor: client) }
+                } catch {
+                    logger.error("Request failed: \(String(describing: error), privacy: .public)")
+                    let response = try? JSONEncoder().encode(TypedError(code: "AGENT_ERROR", retryable: true))
+                    if let response { try? writeFrame(response, descriptor: client) }
                 }
-                try writeFrame(response, descriptor: client)
-            } catch let error as TypedError {
-                let response = try? JSONEncoder().encode(error)
-                if let response { try? writeFrame(response, descriptor: client) }
-            } catch {
-                logger.error("Request failed: \(String(describing: error), privacy: .public)")
-                let response = try? JSONEncoder().encode(TypedError(code: "AGENT_ERROR", retryable: true))
-                if let response { try? writeFrame(response, descriptor: client) }
             }
         }
     }
+    // Keep the main run loop free for Safari Apple events and macOS consent UI.
+    NSApplication.shared.setActivationPolicy(.accessory)
+    NSApplication.shared.run()
 } catch {
     FileHandle.standardError.write(Data("SafariSyncAgent: \(error)\n".utf8))
     exit(70)
