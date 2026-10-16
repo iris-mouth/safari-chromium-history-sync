@@ -70,7 +70,7 @@ The adapter checks the selected schema on history operations. Each new insert:
 
 1. records an Agent-owned `APPLYING` intent;
 2. opens `History.db` with a busy timeout;
-3. starts `BEGIN IMMEDIATE` and validates the schema while holding the write transaction;
+3. starts `BEGIN IMMEDIATE` and validates the schema plus the saved arrival cursor's DB identity and row authenticator while holding the write transaction;
 4. reconciles an existing exact URL/delivery-time visit after a crash;
 5. inserts with `origin=0` and generation `max(current,last_synced)+1`;
 6. updates `current_generation`, never `last_synced_generation`;
@@ -86,11 +86,21 @@ Due own records can use `open -gj -a Safari` only while Safari is stopped. One l
 
 Protocol 1 negotiates optional `cloud-delivery-v1` capabilities and local receipts. Older untracked streams still use local ACKs; a tracked stream requires the updated extension. Payloads are bounded by both event count and bytes, leaving room for authenticated framing. Incoming account-synced visits are not accepted as evidence of the extension's local insertion when `isLocal` is available.
 
+Capability advertisement does not retroactively track older unacknowledged events. Receipt requirements are determined per event from the persisted journal, so a worker can drain its pre-upgrade local ACK before its next capable pull. Before a second `addUrl`, the worker re-pulls the exact pending stream position and verifies that the same event is still queued, then rechecks history evidence. Cancellation releases the pending intent; an unavailable or inactive Agent preserves it without a write. ACK recovery compares the saved receipt with the full visit result, and a known old marker preserves later genuine visits beyond the recent-64 outcome-evidence window.
+
 Safari checkpoint coverage, public-browser delivery not observable, and user-reported receiver Seen/Not Observed are independent observations. Snapshot comparison confirms only unique exact URL/latest-time matches. The Menu parses up to 32 MiB of a receiver export locally, filters owned URLs, deduplicates latest times before dividing it into at most 256 KiB snapshots, and never forwards unrelated receiver history. Absent entries do not establish cloud absence. Diagnostics page at most 32 records per response.
 
 Authenticated Menu commands can create unique per-route probes, record receiver evidence, compare receiver snapshots, prepare/execute a single-event replay, or record an account rebind. Prepared plans expire after five minutes and bind the profile/account epoch. A durable repair-attempt ID prevents repeated plan execution from creating multiple replacements. Safari rows are rechecked before planning/execution. Replay through the regular writer creates a new destination-time visit; it does not requeue an existing native record or claim cloud arrival.
 
 Explicit browser removals cancel matching owned queued/recovery work and suppress replay, scoped to the notification time. Later genuine source visits and explicit attempts remain independent. Previously confirmed missing/changed Safari rows are suppressed rather than recreated. Account epochs are user-declared; public interfaces do not establish automatic account identity or HISTORY readiness. Rebinding freezes previous evidence and cancels pending probes/replays for the old binding without editing history or settings.
+
+The extension captures the removal cutoff when the browser callback arrives, before its serialized work queue. It forwards removed web URLs in bounded batches, including URLs that it has not attempted locally; the Agent matches them to owned journal records. A receipt or explicit receiver export resolving the last Safari obligation clears the old backoff before another poll, while retaining the last-action timestamp and five-minute floor.
+
+Cancellation reporting is a barrier before exchange or evidence-retry writes.
+At most eight removal batches are sent in a turn; any unacknowledged or remaining
+batch keeps new delivery paused until a later alarm drains it. The first capable
+pull after negotiation is discarded when old removal notifications are queued,
+so its page is fetched again after cancellation reporting.
 
 The journal retains detailed applied records for seven days and bounds entries at 4096. Expiry increments an unverified count. Live unapplied intents are not expired; cancelled or suppressed intents expire after the retention window; a full journal backpressures writes with `CLOUD_JOURNAL_FULL` and exposes capacity status. Typed cloud errors do not masquerade as corrupted encrypted state. The unresolved sidecar includes unverified cloud obligations as well as live relay work.
 
@@ -101,6 +111,8 @@ The Agent persists exactly one active profile. Selecting another connected profi
 The Agent learns candidate profile IDs from ordinary authenticated Extension traffic before touching Safari data. A single connected candidate is selected automatically when no active profile exists; multiple candidates require a Menu choice. Candidate presence is ephemeral and rebuilt after Agent restart, while the active profile remains in sealed state.
 
 ## Setup and distribution
+
+The normal menu opens a read-only sync-status window and separate settings for browser selection, Safari automatic assistance, and extension/login setup. Reopening the app opens status. Compatibility, blocked recovery and detailed diagnostics are grouped under troubleshooting. Probe creation, receiver evidence, export comparison, replay and account rebind are collapsed under explicit advanced diagnostics; opening the menu or a status window cannot create a probe. Probe/replay dialogs describe the destination and new history entry before execution.
 
 The Menu app owns setup because it does not have Full Disk Access. The user explicitly selects Chrome Stable, Edge Stable, or both. The coordinator creates or repairs a Native Messaging manifest only for selected browsers and removes only product-owned matching manifests when a browser is deselected. It never creates a Native Messaging directory for an unselected browser.
 

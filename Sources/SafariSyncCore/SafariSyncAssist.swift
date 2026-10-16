@@ -71,8 +71,7 @@ public struct SafariSyncAssist: Codable, Equatable, Sendable {
         let progressed = self.databaseIdentity == databaseIdentity
             && self.checkpoint.map({ checkpoint > $0 }) == true
         if !pending {
-            attemptsWithoutProgress = 0
-            nextAttemptAt = nil
+            resolveBacklog()
         } else if !hasPending || progressed || self.databaseIdentity != databaseIdentity {
             attemptsWithoutProgress = 0
             nextAttemptAt = lastAttempt?.addingTimeInterval(Self.minimumInterval)
@@ -80,6 +79,14 @@ public struct SafariSyncAssist: Codable, Equatable, Sendable {
         hasPending = pending
         self.checkpoint = checkpoint
         self.databaseIdentity = databaseIdentity
+    }
+
+    /// Receiver evidence may resolve the last obligation between native polls.
+    public mutating func resolveBacklog() {
+        hasPending = false
+        attemptsWithoutProgress = 0
+        nextAttemptAt = nil
+        // Keep lastAttempt so new work cannot bypass the shared five-minute floor.
     }
 
     public mutating func inheritLegacyLaunch(_ date: Date) {

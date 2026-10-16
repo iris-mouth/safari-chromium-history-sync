@@ -30,7 +30,5 @@ export function importedVisitEvidence(visits, pending) {
 }
 
 export function hasVisitNewerThan(visits, evidence) {
-  const evidenceIndex = visits.findIndex((visit) =>
-    String(visit.visitId) === String(evidence.visitId));
-  return evidenceIndex > 0;
+  return visits.some((visit) => visitSort(visit, evidence) < 0);
 }

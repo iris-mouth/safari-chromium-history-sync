@@ -6,11 +6,11 @@ import UniformTypeIdentifiers
 final class CloudDiagnosticsWindow: NSWindowController, NSTableViewDataSource, NSTableViewDelegate {
     let profileID: String
     private let request: (MenuCommand) async throws -> Data
-    private let summary = NSTextField(wrappingLabelWithString: "Loading…")
+    private let summary = NSTextField(wrappingLabelWithString: "読み込み中…")
     private let table = NSTableView()
     private var records: [CloudDelivery] = []
-    private var assistEnabled = false
-    private let assistToggle = NSButton(title: "", target: nil, action: nil)
+    private let advanced = NSStackView()
+    private var selectionButtons: [NSButton] = []
     private var busy = false
     private var nextCursor: String?
 
@@ -19,8 +19,8 @@ final class CloudDiagnosticsWindow: NSWindowController, NSTableViewDataSource, N
         self.request = request
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1080, height: 620),
             styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
-        window.title = "Account Sync & Arrival Checks"
-        window.minSize = NSSize(width: 920, height: 540)
+        window.title = "履歴同期の詳細な診断"
+        window.minSize = NSSize(width: 1000, height: 620)
         window.isReleasedWhenClosed = false
         super.init(window: window)
         let stack = NSStackView()
@@ -38,12 +38,12 @@ final class CloudDiagnosticsWindow: NSWindowController, NSTableViewDataSource, N
         stack.addArrangedSubview(summary)
         summary.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -32).isActive = true
         let instructions = NSTextField(wrappingLabelWithString:
-            "Check the same account on iPhone/iPad in the receiving browser’s History. Search for the probe URL without opening it. A probe confirms only that probe. Safari checkpoints are not per-visit cloud receipts; Chrome/Edge account delivery is not observable through the public history interface.")
+            "この画面では、配送した履歴と同期の進行状況を確認できます。端末への到達はiPhone／iPadの履歴で確認してください。テスト履歴の追加や再送などは「検証・詳細操作を表示」にまとめています。")
         stack.addArrangedSubview(instructions)
         instructions.widthAnchor.constraint(equalTo: summary.widthAnchor).isActive = true
-        for (id, title, width) in [("provider", "Route", 80.0), ("url", "URL", 380.0),
-                                    ("time", "Added", 120.0), ("native", "Native progress", 220.0),
-                                    ("remote", "Receiver evidence", 160.0)] {
+        for (id, title, width) in [("provider", "同期先", 80.0), ("url", "URL", 380.0),
+                                    ("time", "履歴への追加日時", 130.0), ("native", "同期の進行状況", 210.0),
+                                    ("remote", "端末での到達確認", 170.0)] {
             let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(id))
             column.title = title
             column.width = width
@@ -63,27 +63,39 @@ final class CloudDiagnosticsWindow: NSWindowController, NSTableViewDataSource, N
         stack.addArrangedSubview(scroll)
         scroll.widthAnchor.constraint(equalTo: summary.widthAnchor).isActive = true
         scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 260).isActive = true
-        assistToggle.target = self
-        assistToggle.action = #selector(toggleSafariAssist)
-        assistToggle.title = "Enable Safari Sync Assist…"
+        let browsing = NSStackView(views: [
+            button("表示を更新", #selector(refresh)),
+            button("以前の記録を表示", #selector(older)),
+            selectionButton("選択URLをコピー", #selector(copyURL)),
+        ])
+        browsing.spacing = 8
+        stack.addArrangedSubview(browsing)
+        let disclosure = NSButton(checkboxWithTitle: "検証・詳細操作を表示", target: self, action: #selector(toggleAdvanced(_:)))
+        stack.addArrangedSubview(disclosure)
+        advanced.orientation = .vertical
+        advanced.spacing = 8
+        stack.addArrangedSubview(advanced)
+        let explanation = NSTextField(wrappingLabelWithString:
+            "テストURLの追加と再送は、新しい訪問を履歴に追加します。実行前に対象と変更内容を確認できます。到達確認は、端末の履歴で選択URLを検索してから記録してください。")
+        advanced.addArrangedSubview(explanation)
+        explanation.widthAnchor.constraint(equalTo: summary.widthAnchor).isActive = true
         let probes = NSStackView(views: [
-            button("Refresh", #selector(refresh)),
-            assistToggle,
-            button("Older Deliveries", #selector(older)),
-            button("Check Safari Arrival", #selector(probeSafari)),
-            button("Check Chrome/Edge Arrival", #selector(probeBrowser)),
+            button("Safariにテスト履歴を追加…", #selector(probeSafari)),
+            button("Chrome/Edgeにテスト履歴を追加…", #selector(probeBrowser)),
+            selectionButton("端末での到達を記録", #selector(markSeen)),
+            selectionButton("未確認として記録", #selector(markNotSeen)),
         ])
         probes.spacing = 8
-        stack.addArrangedSubview(probes)
+        advanced.addArrangedSubview(probes)
         let actions = NSStackView(views: [
-            button("Seen on iPhone/iPad", #selector(markSeen)),
-            button("Not Observed", #selector(markNotSeen)),
-            button("Review Replay…", #selector(reviewReplay)),
-            button("Compare Safari Export…", #selector(compareExport)),
-            button("Rebind Account…", #selector(rebind)),
+            selectionButton("選択URLをもう一度履歴に追加…", #selector(reviewReplay)),
+            button("端末のSafari履歴ファイルと照合…", #selector(compareExport)),
+            button("アカウント変更を記録…", #selector(rebind)),
         ])
         actions.spacing = 8
-        stack.addArrangedSubview(actions)
+        advanced.addArrangedSubview(actions)
+        advanced.isHidden = true
+        updateSelectionButtons()
         window.center()
     }
 
@@ -91,6 +103,35 @@ final class CloudDiagnosticsWindow: NSWindowController, NSTableViewDataSource, N
 
     private func button(_ title: String, _ action: Selector) -> NSButton {
         NSButton(title: title, target: self, action: action)
+    }
+
+    private func selectionButton(_ title: String, _ action: Selector) -> NSButton {
+        let button = button(title, action)
+        selectionButtons.append(button)
+        return button
+    }
+
+    private func updateSelectionButtons() {
+        for button in selectionButtons { button.isEnabled = selected != nil && !busy }
+    }
+
+    func tableViewSelectionDidChange(_ notification: Notification) { updateSelectionButtons() }
+
+    @objc private func toggleAdvanced(_ sender: NSButton) {
+        let show = sender.state == .on
+        guard advanced.isHidden == show else { return }
+        advanced.isHidden = !show
+        guard let window else { return }
+        var frame = window.frame
+        frame.origin.y -= show ? 150 : -150
+        frame.size.height += show ? 150 : -150
+        window.setFrame(frame, display: true)
+    }
+
+    @objc private func copyURL() {
+        guard let entry = selected else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(entry.url.absoluteString, forType: .string)
     }
 
     private func command(_ operation: String, provider: CloudProvider? = nil, deliveryID: String? = nil,
@@ -116,17 +157,16 @@ final class CloudDiagnosticsWindow: NSWindowController, NSTableViewDataSource, N
         if let selectedID, let row = records.firstIndex(where: { $0.id == selectedID }) {
             table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
         }
-        assistEnabled = diagnostics.safariAssist?.enabled == true
-        assistToggle.title = assistEnabled ? "Disable Safari Sync Assist" : "Enable Safari Sync Assist…"
+        updateSelectionButtons()
         let health = diagnostics.summary
-        summary.stringValue = "Profile: \(profileID) · Showing \(records.count) of \(diagnostics.totalDeliveries) recent deliveries\nPending local: \(health.pendingLocal) · Safari waiting: \(health.safariPending) · Possible stalls: \(health.possibleStalls) · Safari checkpoint covered: \(health.checkpointCovered) · Chrome/Edge arrival unverified: \(health.browserNotObservable) · Receiver confirmed: \(health.remoteSeen) · Removed/changed: \(health.suppressed)"
+        summary.stringValue = "表示中：\(records.count)件／\(diagnostics.totalDeliveries)件\n履歴への追加待ち：\(health.pendingLocal) · Safari側の同期待ち：\(health.safariPending) · 進行の遅れ：\(health.possibleStalls)\nSafari側で処理済み：\(health.checkpointCovered) · Chrome/Edgeの端末到達未確認：\(health.browserNotObservable) · 端末で到達確認済み：\(health.remoteSeen) · 削除／変更済み：\(health.suppressed)"
         if let assist = diagnostics.safariAssist {
-            summary.stringValue += "\nSafari Sync Assist: \(assist.enabled ? "on" : "off") · Last action: \(assist.lastResult ?? "none")"
+            summary.stringValue += "\nSafariの自動同期補助：\(assist.enabled ? "有効" : "無効")（変更はメニューの「Safariの自動同期補助を設定…」から）"
             if let next = assist.nextAttemptAt, health.safariPending > 0 {
-                summary.stringValue += " · Next automatic attempt: \(next.formatted(date: .omitted, time: .standard))"
+                summary.stringValue += "\n次に処理を試す時刻：\(next.formatted(date: .omitted, time: .standard))"
             }
         }
-        if health.capacityReached { summary.stringValue += "\nTracking capacity reached; new delivery is waiting for space." }
+        if health.capacityReached { summary.stringValue += "\n記録数の上限に達したため、新しい配送は空きができるまで待機します。" }
     }
 
     private var selected: CloudDelivery? {
@@ -136,41 +176,29 @@ final class CloudDiagnosticsWindow: NSWindowController, NSTableViewDataSource, N
     private func run(_ work: @escaping () async throws -> Void) {
         guard !busy else { return }
         busy = true
+        updateSelectionButtons()
         Task {
-            defer { busy = false }
+            defer { busy = false; updateSelectionButtons() }
             do { try await work() }
             catch {
                 let alert = NSAlert()
-                alert.messageText = "Account sync action could not complete"
+                alert.messageText = "操作を完了できませんでした"
                 if let typed = error as? TypedError {
                     switch typed.code {
                     case "CLOUD_EXTENSION_UPGRADE_REQUIRED":
-                        alert.informativeText = "Connect or reload the bundled Chrome/Edge extension, then refresh this window."
+                        alert.informativeText = "アプリに同梱したChrome/Edge拡張機能を読み込み直してから、表示を更新してください。"
                     case "PROFILE_NOT_ACTIVE", "STALE_CLOUD_REPAIR_PLAN":
-                        alert.informativeText = "The profile, account binding, or repair plan changed. Reopen Account Sync and review the current deliveries."
+                        alert.informativeText = "同期先のブラウザやアカウント情報が変わりました。この画面を閉じ、詳細な診断を開き直してください。"
                     case "INVALID_SAFARI_EXPORT":
-                        alert.informativeText = "Use a supported Safari History.json export from the receiving device, no larger than 32 MiB. Unsupported formats cannot establish arrival."
+                        alert.informativeText = "到達先の端末から書き出したSafariのHistory.json（32 MiB以下）を選んでください。"
                     case "CLOUD_REPLAY_NOT_ALLOWED":
-                        alert.informativeText = "Select a locally confirmed delivery that has not been removed, changed, or rebound to another account."
+                        alert.informativeText = "履歴への追加が確認でき、削除・変更やアカウント変更の影響を受けていない記録を選んでください。"
                     default: alert.informativeText = typed.code
                     }
-                } else { alert.informativeText = "The Agent is unavailable or the selected file could not be read. Refresh the app’s status and try again." }
+                } else { alert.informativeText = "同期サービスに接続できないか、選択したファイルを読み取れません。接続とファイルを確認してください。" }
                 alert.runModal()
             }
         }
-    }
-
-    @objc private func toggleSafariAssist() {
-        if !assistEnabled {
-            let alert = NSAlert()
-            alert.messageText = "Enable Safari Sync Assist?"
-            alert.informativeText = "When this app’s Safari visits remain pending, reuse a dedicated sync tab to load example.com in Safari. This creates ordinary history entries that can sync to your devices. Safari may ask for Automation permission. The helper waits at least 90 seconds, then retries while work remains. Without progress, retries slow from 5 minutes to at most once per hour. Progress restores the 5-minute interval. It stops when the visits are checkpoint-covered or confirmed on your device. It does not edit your other tabs. You can disable it here."
-            alert.addButton(withTitle: "Enable")
-            alert.addButton(withTitle: "Cancel")
-            guard alert.runModal() == .alertFirstButtonReturn else { return }
-        }
-        let action = assistEnabled ? "disable" : "enable"
-        run { self.display(try await self.perform(self.command("cloudSafariAssist", result: action))) }
     }
 
     @objc func refresh() {
@@ -183,6 +211,13 @@ final class CloudDiagnosticsWindow: NSWindowController, NSTableViewDataSource, N
     }
 
     private func probe(_ provider: CloudProvider) {
+        let route = provider == .safari ? "このMacのSafari" : "選択中のChrome/Edge"
+        let confirmation = NSAlert()
+        confirmation.messageText = "\(route)にテスト履歴を追加しますか？"
+        confirmation.informativeText = "example.comの一意なテストURLを通常の配送経路で履歴に追加します。同期が進むと他の端末にも表示される場合があります。追加後、iPhone／iPadの履歴でURLを検索して到達を確認できます。"
+        confirmation.addButton(withTitle: "テスト履歴を追加")
+        confirmation.addButton(withTitle: "キャンセル")
+        guard confirmation.runModal() == .alertFirstButtonReturn else { return }
         run {
             let before = Set(self.records.map(\.id))
             let diagnostics = try await self.perform(self.command("cloudProbe", provider: provider))
@@ -190,8 +225,8 @@ final class CloudDiagnosticsWindow: NSWindowController, NSTableViewDataSource, N
             if let row = self.records.firstIndex(where: { !before.contains($0.id) && $0.kind == "probe" && $0.provider == provider }) {
                 self.table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
                 let alert = NSAlert()
-                alert.messageText = "Search the receiving browser’s History"
-                alert.informativeText = "\(self.records[row].url.absoluteString)\n\nUse Safari for the iCloud route, or the selected Chrome/Edge account for the browser route. Do not open this URL on the receiving device first. Refresh after local delivery, then record Seen or Not Observed. A missing item is not proof that the cloud record is absent."
+                alert.messageText = "端末のブラウザ履歴でURLを検索してください"
+                alert.informativeText = "\(self.records[row].url.absoluteString)\n\n同じアカウントのiPhone／iPadで、SafariまたはChrome/Edgeの履歴を検索してください。到達確認の前にこのURLを開かず、履歴への表示だけを確認します。追加の完了後に表示を更新し、選択した記録の到達状況を記録できます。"
                 alert.runModal()
             }
         }
@@ -214,10 +249,10 @@ final class CloudDiagnosticsWindow: NSWindowController, NSTableViewDataSource, N
             self.display(diagnostics)
             guard let plan = diagnostics.plan else { throw TypedError(code: "STALE_CLOUD_REPAIR_PLAN") }
             let alert = NSAlert()
-            alert.messageText = "Replay this URL signal?"
-            alert.informativeText = "\(plan.url.absoluteString)\n\nRoute: \(plan.provider == .safari ? "Safari / iCloud" : "Chrome/Edge account")\nProfile: \(plan.profileID)\n\nConfirm the browser/iCloud account is the intended account and history sync is enabled. This creates one new visit at the replay time. It does not confirm cloud arrival or remove the previous visit."
-            alert.addButton(withTitle: "Replay URL")
-            alert.addButton(withTitle: "Cancel")
+            alert.messageText = "選択URLをもう一度履歴に追加しますか？"
+            alert.informativeText = "\(plan.url.absoluteString)\n\n追加先：\(plan.provider == .safari ? "Safari / iCloud" : "選択中のChrome/Edge")\n\n意図したアカウントにログインし、履歴の同期が有効なことを確認してください。現在時刻の訪問を1件追加します。端末への到達は、追加後に端末で確認してください。"
+            alert.addButton(withTitle: "履歴にもう一度追加")
+            alert.addButton(withTitle: "キャンセル")
             guard alert.runModal() == .alertFirstButtonReturn else { return }
             self.display(try await self.perform(self.command("cloudExecuteReplay", planID: plan.id)))
         }
@@ -226,13 +261,13 @@ final class CloudDiagnosticsWindow: NSWindowController, NSTableViewDataSource, N
     @objc private func compareExport() {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.json]
-        panel.message = "Choose Safari History.json exported from the receiving iPhone/iPad (up to 32 MiB)."
+        panel.message = "到達先のiPhone／iPadから書き出したSafariのHistory.json（32 MiB以下）を選んでください。"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         let alert = NSAlert()
-        alert.messageText = "Confirm the export’s source"
-        alert.informativeText = "This file must come from the receiving iPhone/iPad using the same Apple Account and Safari profile. A file exported from this Mac cannot prove remote arrival. Only exact URL/latest-visit-time matches are recorded; absent entries remain unverified."
-        alert.addButton(withTitle: "Compare Receiver Export")
-        alert.addButton(withTitle: "Cancel")
+        alert.messageText = "到達先の端末のファイルですか？"
+        alert.informativeText = "同じApple AccountとSafariプロファイルを使うiPhone／iPadのファイルを選んでください。URLと最新の訪問日時が一致する記録を到達確認済みにします。見つからない記録は未確認のまま残します。"
+        alert.addButton(withTitle: "ファイルと照合")
+        alert.addButton(withTitle: "キャンセル")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         run {
             let file = try FileHandle(forReadingFrom: url)
@@ -260,13 +295,13 @@ final class CloudDiagnosticsWindow: NSWindowController, NSTableViewDataSource, N
 
     @objc private func rebind() {
         let picker = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 260, height: 28))
-        picker.addItems(withTitles: ["Safari / Apple Account", "Chrome/Edge account"])
+        picker.addItems(withTitles: ["Safari / Apple Account", "Chrome/Edgeのアカウント"])
         let alert = NSAlert()
-        alert.messageText = "Record an account change"
-        alert.informativeText = "Use this after changing the corresponding account. Previous evidence remains in the journal, but is excluded from this binding. Pending probes/replays and old repair plans are invalidated. This does not change browser sign-in or history settings."
+        alert.messageText = "変更済みのアカウントを同期記録に反映しますか？"
+        alert.informativeText = "ブラウザやiCloudのアカウントを変更した後に使います。以前のアカウント向けの未完了テスト・再送を取り消し、古い到達記録を新しいアカウントとは分けて扱います。ログインするアカウント自体の変更は、ブラウザやシステム設定で行ってください。"
         alert.accessoryView = picker
-        alert.addButton(withTitle: "Rebind")
-        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "アカウント変更を記録")
+        alert.addButton(withTitle: "キャンセル")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         let provider: CloudProvider = picker.indexOfSelectedItem == 0 ? .safari : .browser
         run { self.display(try await self.perform(self.command("cloudRebind", provider: provider))) }
@@ -279,17 +314,18 @@ final class CloudDiagnosticsWindow: NSWindowController, NSTableViewDataSource, N
         let entry = records[row]
         let value: String
         switch id {
-        case "provider": value = entry.provider == .safari ? "iCloud" : "Browser"
+        case "provider": value = entry.provider == .safari ? "Safari" : "Chrome/Edge"
         case "url": value = entry.url.absoluteString
-        case "time": value = entry.destinationTime?.formatted(date: .abbreviated, time: .shortened) ?? "Queued"
+        case "time": value = entry.destinationTime?.formatted(date: .abbreviated, time: .shortened) ?? "追加待ち"
         case "native":
-            value = ["notObservable": "Account delivery not observable", "pending": "Waiting for Safari",
-                     "waitingForSafariActivity": "Waiting for Safari activity", "possibleStall": "Possible stall",
-                     "checkpointCovered": "Safari checkpoint covered", "localMissingOrChanged": "Local visit removed/changed",
-                     "databaseChanged": "History database changed", "localRemoved": "Local history removed"][entry.nativeState] ?? entry.nativeState
+            value = ["notObservable": "端末への到達確認待ち", "pending": "Safariの処理待ち",
+                     "waitingForSafariActivity": "Safariの動作待ち", "possibleStall": "同期の進行が遅れています",
+                     "checkpointCovered": "Safari側で処理済み", "localMissingOrChanged": "履歴が削除／変更されました",
+                     "databaseChanged": "履歴DBが変更されました", "localRemoved": "履歴が削除されました",
+                     "accountBindingChanged": "アカウント変更で取消済み"][entry.nativeState] ?? entry.nativeState
         default:
-            value = ["unverified": "Unverified", "seen": "Seen (user evidence)",
-                     "notObserved": "Not observed (not absence)"][entry.remoteState] ?? entry.remoteState
+            value = ["unverified": "未確認", "seen": "到達を確認済み（申告）",
+                     "notObserved": "まだ見つかっていません"][entry.remoteState] ?? entry.remoteState
         }
         let field = NSTextField(labelWithString: value)
         field.lineBreakMode = .byTruncatingMiddle

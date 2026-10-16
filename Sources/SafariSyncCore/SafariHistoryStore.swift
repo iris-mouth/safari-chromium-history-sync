@@ -148,13 +148,16 @@ public final class SafariHistoryStore: @unchecked Sendable {
         eventID: String,
         url: URL,
         title: String?,
-        deliveredAt: Date
+        deliveredAt: Date,
+        validating cursor: SafariArrivalCursor? = nil,
+        authenticationKey: Data? = nil
     ) throws -> DeliveryReceipt {
         guard ["http", "https"].contains(url.scheme?.lowercased() ?? "") else {
             throw SafariHistoryError.invalidURL
         }
         return try lock.withLock {
-            if let receipt = try ledger.completed(eventID: eventID) {
+            let completed = try ledger.completed(eventID: eventID)
+            if let receipt = completed, cursor == nil {
                 return DeliveryReceipt(
                     eventID: eventID,
                     visitID: receipt.visitID,
@@ -164,7 +167,7 @@ public final class SafariHistoryStore: @unchecked Sendable {
                 )
             }
 
-            let safariTime = try ledger.begin(
+            let safariTime = try completed?.safariTime ?? ledger.begin(
                 eventID: eventID,
                 safariTime: deliveredAt.timeIntervalSinceReferenceDate
             )
@@ -174,6 +177,19 @@ public final class SafariHistoryStore: @unchecked Sendable {
             do {
                 // Hold the write transaction while checking the schema and inserting.
                 try validateSchema(db)
+                if let cursor {
+                    guard cursor.databaseIdentity == (try databaseIdentity()) else {
+                        throw SafariHistoryError.historyIdentityChanged
+                    }
+                    guard let authenticationKey else { throw SafariHistoryError.historyAnchorInvalid }
+                    try validateAnchor(cursor, db: db, key: authenticationKey)
+                }
+                if let receipt = completed {
+                    try db.exec("COMMIT")
+                    return DeliveryReceipt(eventID: eventID, visitID: receipt.visitID,
+                        generation: receipt.generation, disposition: .alreadyApplied,
+                        deliveredAt: Date(timeIntervalSinceReferenceDate: receipt.safariTime))
+                }
                 if let existing = try existingVisit(db, url: url.absoluteString, safariTime: safariTime) {
                     let generation = try generationForVisit(db, visitID: existing)
                     try db.exec("COMMIT")

@@ -24,6 +24,7 @@ enum CloudDeliveryTests {
         try backsOffFailuresAndResetsOnlyOnNativeProgress()
         try sharesLaunchAndNavigationCooldownAndStopsOnReceiverEvidence()
         try migratesExhaustedAssistAndLaunchBudgets()
+        try ReviewRegressionTests.run()
     }
 
     static func service(_ fixture: HistoryFixture) -> AgentService {

@@ -192,12 +192,14 @@ public struct CloudDeliveryCoordinator: Codable, Equatable, Sendable {
             deliveries[index].nativeState = "accountBindingChanged"
         }
         bindings[scope(provider, profileID)] = UUID().uuidString
+        resetSafariRetryIfResolved()
     }
 
     public mutating func reserve(id: String, profileID: String, provider: CloudProvider,
                                  url: URL, now: Date, kind: String = "relay", parentID: String? = nil,
                                  title: String? = nil) throws {
         prune(now: now)
+        resetSafariRetryIfResolved()
         if let existing = deliveries.first(where: { $0.id == id }) {
             guard existing.profileID == profileID, existing.provider == provider, existing.url == url else {
                 throw TypedError(code: "CLOUD_RECEIPT_CONFLICT")
@@ -385,6 +387,7 @@ public struct CloudDeliveryCoordinator: Codable, Equatable, Sendable {
         deliveries[index].remoteState = result
         deliveries[index].remoteDevice = device
         deliveries[index].remoteObservedAt = now
+        resetSafariRetryIfResolved()
     }
 
     public mutating func prepareRepair(id: String, profileID: String, now: Date) throws -> CloudRepairPlan {
@@ -440,6 +443,14 @@ public struct CloudDeliveryCoordinator: Codable, Equatable, Sendable {
             deliveries[index].remoteDevice = "User-supplied Safari export"
             deliveries[index].remoteObservedAt = now
         }
+        resetSafariRetryIfResolved()
+    }
+
+    private mutating func resetSafariRetryIfResolved() {
+        let pending = deliveries.contains { $0.provider == .safari && isCurrent($0)
+            && $0.localAppliedAt != nil && !$0.suppressed
+            && $0.remoteState != "seen" && $0.nativeState != "checkpointCovered" }
+        if !pending { safariAssist?.resolveBacklog() }
     }
 
     public func summary(profileID: String?) -> CloudSummary {

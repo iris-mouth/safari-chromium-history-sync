@@ -4,7 +4,7 @@ Contributions should keep the project local, inspectable, and reversible.
 
 ## Setup
 
-Build the app, open it, and use **Start Setup** to select only the browser under test. Load the extension from the app's bundled `ChromiumExtension` folder. Do not start synchronization until the legacy writer is stopped.
+Build the app, open it, and use **拡張機能と自動起動を設定… → 設定を開始** to select only the browser under test. Load the extension from the app's bundled `ChromiumExtension` folder. Do not start synchronization until the legacy writer is stopped.
 
 Run checks before opening a PR:
 
@@ -13,6 +13,11 @@ Run checks before opening a PR:
 ```
 
 `./scripts/package-app.sh` creates ad-hoc-signed app bundles and an unsigned, payload-only PKG for local testing. The PKG must continue to contain only the two sibling app bundles under `/Applications`; do not add installer scripts, store-distribution machinery, or user-specific Native Messaging files to it.
+
+`scripts/check-menu.sh` checks the real AppKit controllers with in-memory replies,
+including read-only status opening and initially collapsed test actions. It
+excludes the app entry point so it cannot launch or contact the installed Agent.
+It is part of `scripts/check.sh` and does not navigate any real browser.
 
 ## Testing Safely
 
@@ -40,4 +45,4 @@ Include:
 
 Avoid committing sealed state, delivery ledgers, Safari databases, browser profile files, or screenshots that reveal private URLs.
 
-When changing setup behavior, verify Chrome-only, Edge-only, and both-browser selections. An unselected browser must not gain a Native Messaging directory or manifest. Use the app's **Setup & Diagnostics** screen for installation checks rather than introducing a second shell implementation.
+When changing setup behavior, verify Chrome-only, Edge-only, and both-browser selections. An unselected browser must not gain a Native Messaging directory or manifest. Use the app's **拡張機能と自動起動を設定…** screen for installation checks rather than introducing a second shell implementation.

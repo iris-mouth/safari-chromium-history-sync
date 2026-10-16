@@ -7,34 +7,21 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let agentBundleIdentifier = ProductIdentity.agentBundleIdentifier
     private let setupCoordinator = SetupCoordinator()
     private var statusItem: NSStatusItem?
-    private var healthItem = NSMenuItem(title: "Checking status…", action: nil, keyEquivalent: "")
-    private var compatibilityItem = NSMenuItem(title: "Compatibility…", action: #selector(showCompatibility), keyEquivalent: "")
-    private var profileItem = NSMenuItem(title: "Change Profile…", action: #selector(changeProfile), keyEquivalent: "")
-    private var recoveryItem = NSMenuItem(title: "Resolve Sync Issue…", action: #selector(resolveBlockedIssue), keyEquivalent: "")
+    private var healthItem = NSMenuItem(title: "同期状況を確認中…", action: nil, keyEquivalent: "")
+    private var compatibilityItem = NSMenuItem(title: "このMacの対応状況を見る…", action: #selector(showCompatibility), keyEquivalent: "")
+    private var profileItem = NSMenuItem(title: "同期するブラウザを選ぶ…", action: #selector(changeProfile), keyEquivalent: "")
+    private var recoveryItem = NSMenuItem(title: "停止中の同期を復旧…", action: #selector(resolveBlockedIssue), keyEquivalent: "")
     private var browserCheckboxes: [SupportedBrowser: NSButton] = [:]
     private var setupStartButton: NSButton?
     private var latestHealth: HealthSnapshot?
     private var cloudWindow: CloudDiagnosticsWindow?
+    private var statusWindow: SyncStatusWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.button?.title = ProductIdentity.menuBarLabel
-        let menu = NSMenu()
-        menu.delegate = self
-        menu.addItem(healthItem)
-        menu.addItem(compatibilityItem)
-        menu.addItem(profileItem)
-        menu.addItem(recoveryItem)
-        menu.addItem(.separator())
-        menu.addItem(withTitle: "Setup & Diagnostics…", action: #selector(showSetup), keyEquivalent: "")
-        menu.addItem(withTitle: "Account Sync & Arrival Checks…", action: #selector(showCloudDiagnostics), keyEquivalent: "")
-        menu.addItem(withTitle: "Refresh Status", action: #selector(refreshStatus), keyEquivalent: "r")
-        menu.addItem(.separator())
-        menu.addItem(withTitle: "Quit Menu (Sync Continues)", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-        item.menu = menu
+        item.menu = makeMenu()
         statusItem = item
-        profileItem.isHidden = true
-        recoveryItem.isHidden = true
 
         let setupState = setupCoordinator.inspect()
         if !setupState.legacyArtifacts.isEmpty {
@@ -59,8 +46,38 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    func makeMenu() -> NSMenu {
+        let menu = NSMenu()
+        menu.delegate = self
+        menu.addItem(healthItem)
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "同期状況を見る…", action: #selector(showSyncStatus), keyEquivalent: "")
+        menu.addItem(profileItem)
+        menu.addItem(withTitle: "Safariの自動同期補助を設定…", action: #selector(configureSafariAssist), keyEquivalent: "")
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "拡張機能と自動起動を設定…", action: #selector(showSetup), keyEquivalent: "")
+        let troubleshooting = NSMenu()
+        troubleshooting.addItem(compatibilityItem)
+        troubleshooting.addItem(recoveryItem)
+        troubleshooting.addItem(withTitle: "詳細な診断を開く…", action: #selector(showCloudDiagnostics), keyEquivalent: "")
+        let troubleshootingItem = NSMenuItem(title: "問題を調べる", action: nil, keyEquivalent: "")
+        troubleshootingItem.submenu = troubleshooting
+        menu.addItem(troubleshootingItem)
+        menu.addItem(withTitle: "状態表示を更新", action: #selector(refreshStatus), keyEquivalent: "r")
+        menu.addItem(.separator())
+        let quit = menu.addItem(withTitle: "メニューを終了（同期は継続）", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        for item in menu.items + troubleshooting.items where item.action != nil { item.target = self }
+        quit.target = NSApp
+        menu.items.first(where: { $0.action == #selector(showSyncStatus) })?.toolTip = "同期状況を表示します。履歴の追加や設定変更は行いません。"
+        profileItem.toolTip = "候補を表示します。選択を確定すると、そのブラウザの履歴をSafariと同期します。"
+        recoveryItem.toolTip = "停止原因と復旧方法を表示します。実行前に変更内容を確認できます。"
+        profileItem.isHidden = true
+        recoveryItem.isHidden = true
+        return menu
+    }
+
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if !flag { showCloudDiagnostics() }
+        if !flag { showSyncStatus() }
         return true
     }
 
@@ -77,15 +94,15 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         let browsers = setupCoordinator.availableBrowsers()
         guard !browsers.isEmpty else {
-            showMessage(title: "No supported browser found", detail: "Install Google Chrome Stable or Microsoft Edge Stable, then run setup again.")
+            showMessage(title: "対応ブラウザが見つかりません", detail: "Google ChromeまたはMicrosoft Edgeの安定版をインストールしてから設定してください。")
             return
         }
 
         let alert = NSAlert()
-        alert.messageText = "Set up Safari Chromium History Sync"
-        alert.informativeText = "Choose only the browsers you want to sync. No settings are created for unselected browsers.\n\n" + compatibilityDescription()
-        alert.addButton(withTitle: "Start Setup")
-        alert.addButton(withTitle: "Cancel")
+        alert.messageText = "拡張機能と自動起動の設定"
+        alert.informativeText = "同期に使うブラウザを選んでください。「設定を開始」を押すと、選択したブラウザの接続設定とログイン時の自動起動を登録し、同期サービスを再起動します。拡張機能の読み込み画面も開きます。\n\n" + compatibilityDescription()
+        alert.addButton(withTitle: "設定を開始")
+        alert.addButton(withTitle: "キャンセル")
         let stack = NSStackView()
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -134,8 +151,8 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             for browser in selectedBrowsers { setupCoordinator.openExtensionsPage(for: browser) }
             showMessage(
-                title: "Load the extension",
-                detail: "Turn on Developer mode, choose Load unpacked, and select the revealed ChromiumExtension folder. The app will detect connected profiles automatically."
+                title: "ブラウザの拡張機能を読み込んでください",
+                detail: "ブラウザの拡張機能画面で「開発者モード」を有効にし、「パッケージ化されていない拡張機能を読み込む」から、表示したChromiumExtensionフォルダを選んでください。"
             )
             await finishSetup(with: await waitForHealth())
         } catch {
@@ -160,10 +177,10 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func showLoginItemApproval() {
         let alert = NSAlert()
-        alert.messageText = "Approval is required for Open at Login."
-        alert.informativeText = "Sync can run now, but it will not restart automatically after login until you approve it in System Settings."
-        alert.addButton(withTitle: "Open System Settings")
-        alert.addButton(withTitle: "Later")
+        alert.messageText = "ログイン時の自動起動に許可が必要です"
+        alert.informativeText = "システム設定で許可すると、次回のログイン時にも同期を自動で開始できます。"
+        alert.addButton(withTitle: "システム設定を開く")
+        alert.addButton(withTitle: "あとで")
         if alert.runModal() == .alertFirstButtonReturn { SMAppService.openSystemSettingsLoginItems() }
     }
 
@@ -210,7 +227,7 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func finishSetup(with health: HealthSnapshot?) async {
         guard let health else {
-            showMessage(title: "Agent unavailable", detail: "The Agent did not respond. Run Setup & Diagnostics again.")
+            showMessage(title: "同期サービスに接続できません", detail: "「拡張機能と自動起動を設定…」から設定を確認してください。")
             await refreshStatusAsync()
             return
         }
@@ -223,7 +240,7 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
            let profile = health.connectedProfiles.first {
             do {
                 try await selectProfile(profile.profileID)
-                showMessage(title: "Setup complete", detail: "Connected \(profile.displayName).")
+                showMessage(title: "設定が完了しました", detail: "\(profile.displayName)と接続しました。")
             } catch {
                 NSAlert(error: error).runModal()
             }
@@ -231,35 +248,35 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             latestHealth = health
             changeProfile()
         } else if health.connectedProfiles.isEmpty {
-            showMessage(title: "Extension not connected", detail: "Finish loading the unpacked extension, then choose Refresh Status.")
+            showMessage(title: "拡張機能の接続待ちです", detail: "拡張機能を読み込んでから、メニューの「状態表示を更新」を選んでください。")
         } else {
-            showMessage(title: "Setup complete", detail: "History sync is ready.")
+            showMessage(title: "設定が完了しました", detail: "履歴を同期する準備ができました。")
         }
         await refreshStatusAsync()
     }
 
     @objc private func changeProfile() {
         guard let health = latestHealth, !health.connectedProfiles.isEmpty else {
-            showMessage(title: "No connected profiles", detail: "Open a selected browser profile with the extension enabled, then refresh status.")
+            showMessage(title: "接続中のブラウザがありません", detail: "拡張機能を有効にしたブラウザを開き、メニューの「状態表示を更新」を選んでください。")
             return
         }
         let alert = NSAlert()
-        alert.messageText = "Choose the active browser profile"
-        alert.informativeText = "Pending history remains with its original profile when you switch."
+        alert.messageText = "Safariと履歴を同期するブラウザを選ぶ"
+        alert.informativeText = "「このブラウザと同期」を押すと、選択したプロファイルとの双方向同期に切り替わります。切り替え前の配送待ち履歴は元のプロファイルに残り、別のプロファイルには送られません。"
         let popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 360, height: 28))
         for profile in health.connectedProfiles {
             popup.addItem(withTitle: profile.displayName)
         }
         if let active = health.connectedProfiles.firstIndex(where: \.active) { popup.selectItem(at: active) }
         alert.accessoryView = popup
-        alert.addButton(withTitle: "Use Profile")
-        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "このブラウザと同期")
+        alert.addButton(withTitle: "キャンセル")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         let profile = health.connectedProfiles[popup.indexOfSelectedItem]
         Task {
             do {
                 try await selectProfile(profile.profileID)
-                showMessage(title: "Profile selected", detail: "Using \(profile.displayName).")
+                showMessage(title: "同期するブラウザを変更しました", detail: "\(profile.displayName)と同期します。")
                 await refreshStatusAsync()
             } catch {
                 NSAlert(error: error).runModal()
@@ -280,32 +297,27 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 health = try await requestHealth()
             }
             latestHealth = health
-            compatibilityItem.title = health.issueCode == AgentIssueCode.runtimeUnsupported
-                ? "Compatibility checks failed…"
-                : (health.compatibility?.summary ?? "Compatibility not checked") + "…"
             profileItem.isHidden = health.connectedProfiles.isEmpty
             recoveryItem.isHidden = health.runtimeState != "blocked"
             if health.runtimeState == "initializing" {
-                healthItem.title = "Agent starting…"
+                healthItem.title = "同期サービスを起動中…"
             } else if health.runtimeState == "blocked" {
                 healthItem.title = message(for: health.issueCode)
             } else if let active = health.activeProfileID,
                       let profile = health.connectedProfiles.first(where: { $0.profileID == active }) {
-                let waiting = health.cloud.map { " · Safari waiting \($0.safariPending) · receiver confirmed \($0.remoteSeen)" } ?? ""
-                healthItem.title = "Active · \(profile.displayName) · recovery \(health.recoveryCount)\(waiting)"
+                healthItem.title = "同期中 · \(profile.displayName)"
             } else if health.activeProfileID != nil {
-                healthItem.title = "Active profile disconnected · waiting for extension"
+                healthItem.title = "ブラウザ拡張機能の接続待ち"
             } else if health.connectedProfiles.isEmpty {
-                healthItem.title = "Waiting for extension"
+                healthItem.title = "ブラウザ拡張機能の接続待ち"
             } else {
-                healthItem.title = "Choose an active profile"
+                healthItem.title = "同期するブラウザを選んでください"
             }
         } catch {
             latestHealth = nil
-            compatibilityItem.title = "Compatibility not checked…"
             profileItem.isHidden = true
             recoveryItem.isHidden = true
-            healthItem.title = "Agent not connected"
+            healthItem.title = "同期サービスに接続できません"
         }
     }
 
@@ -314,12 +326,56 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return try JSONDecoder().decode(HealthSnapshot.self, from: response)
     }
 
+    @objc private func showSyncStatus() {
+        if statusWindow == nil {
+            statusWindow = SyncStatusWindow { [weak self] command in
+                guard let self else { throw TypedError(code: "MENU_UNAVAILABLE") }
+                return try await self.requestAsync(command)
+            }
+        }
+        statusWindow?.showWindow(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        statusWindow?.refresh()
+    }
+
+    @objc private func configureSafariAssist() {
+        Task {
+            do {
+                let health = try await requestHealth()
+                guard health.runtimeState == "ready", let profile = health.activeProfileID else {
+                    showMessage(title: "同期補助を設定できません", detail: "同期サービスの接続と、同期するブラウザの選択を確認してください。")
+                    return
+                }
+                let data = try await requestAsync(MenuCommand(operation: "cloudStatus", profileID: profile))
+                let diagnostics = try JSONDecoder().decode(CloudDiagnostics.self, from: data)
+                let enabled = diagnostics.safariAssist?.enabled == true
+                let alert = NSAlert()
+                alert.messageText = "Safariの自動同期補助"
+                alert.informativeText = "Safariへの追加済み履歴が同期待ちのとき、専用タブでexample.comを読み込み、Safari標準の同期処理を促します。通常の閲覧履歴が追加され、他の端末にも同期される場合があります。初回はSafariの操作許可が必要です。\n\n90秒待ってから処理を試し、進まない間は間隔を5分から最大1時間まで延ばして再試行します。別のタブは変更しません。"
+                let checkbox = NSButton(checkboxWithTitle: "専用タブを使った自動同期補助を有効にする", target: nil, action: nil)
+                checkbox.state = enabled ? .on : .off
+                checkbox.frame = NSRect(x: 0, y: 0, width: 360, height: 24)
+                alert.accessoryView = checkbox
+                alert.addButton(withTitle: "設定を保存")
+                alert.addButton(withTitle: "キャンセル")
+                guard alert.runModal() == .alertFirstButtonReturn, (checkbox.state == .on) != enabled else { return }
+                let response = try await requestAsync(MenuCommand(operation: "cloudSafariAssist", profileID: profile,
+                    result: checkbox.state == .on ? "enable" : "disable"))
+                if let failure = try? JSONDecoder().decode(TypedError.self, from: response), failure.type == "error" { throw failure }
+                _ = try JSONDecoder().decode(CloudDiagnostics.self, from: response)
+                statusWindow?.refresh()
+            } catch {
+                showMessage(title: "設定を保存できませんでした", detail: "同期サービスの接続を確認し、もう一度お試しください。")
+            }
+        }
+    }
+
     @objc private func showCloudDiagnostics() {
         Task { [self] in
             do {
                 let health = try await requestHealth()
                 guard health.runtimeState == "ready", let profile = health.activeProfileID else {
-                    showMessage(title: "Account sync unavailable", detail: "Resolve the current sync issue and select an active browser profile first.")
+                    showMessage(title: "詳細な診断を開けません", detail: "停止中の同期を復旧し、同期するブラウザを選択してください。")
                     return
                 }
                 if cloudWindow?.profileID != profile {
@@ -333,7 +389,7 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 NSApp.activate(ignoringOtherApps: true)
                 cloudWindow?.refresh()
             } catch {
-                showMessage(title: "Agent unavailable", detail: "Refresh Status or run Setup & Diagnostics, then reopen Account Sync.")
+                showMessage(title: "同期サービスに接続できません", detail: "メニューの「状態表示を更新」や「拡張機能と自動起動を設定…」で接続を確認してください。")
             }
         }
     }
@@ -371,56 +427,56 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         alert.messageText = message(for: issue)
         switch issue {
         case AgentIssueCode.safariAccessUnavailable:
-            alert.informativeText = "Verify that \(ProductIdentity.agentBundleName) has Full Disk Access, then run Setup & Diagnostics again. If access is already enabled, reinstall a qualified app update."
-            alert.addButton(withTitle: "Open Full Disk Access")
-            alert.addButton(withTitle: "Later")
+            alert.informativeText = "システム設定で\(ProductIdentity.agentBundleName)の「フルディスクアクセス」を確認してください。その後、「拡張機能と自動起動を設定…」から同期サービスを再起動できます。"
+            alert.addButton(withTitle: "アクセス許可の設定を開く")
+            alert.addButton(withTitle: "あとで")
             if alert.runModal() == .alertFirstButtonReturn,
                let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") {
                 NSWorkspace.shared.open(url)
             }
         case AgentIssueCode.runtimeUnsupported:
-            alert.informativeText = "Sync stopped because the runtime requirements, Safari database structure, or sync metadata are incompatible. Pending work is retained. An OS or Safari version change alone does not block sync. Check for an app update supporting the changed structure."
+            alert.informativeText = "macOSの動作条件、Safari履歴DBの構造、または同期状態が対応条件を満たしていません。配送待ちの履歴は保持しています。対応したアプリの更新を確認してください。"
             alert.runModal()
         case AgentIssueCode.historyIdentityChanged, AgentIssueCode.historyAnchorInvalid:
-            alert.informativeText = "Safari's history identity or saved arrival anchor changed. Resetting the Safari cursor starts scanning at the current Safari baseline. It preserves the active profile, pending outbox, recovery work, and delivery ledger."
-            alert.addButton(withTitle: "Reset Safari Cursor")
-            alert.addButton(withTitle: "Cancel")
+            alert.informativeText = "Safari履歴の置換または変更を検出しました。読み取り開始位置を現在の履歴末尾に設定し直すと、以後の新しい履歴から同期を再開します。過去の履歴は取り込み直しません。選択中のブラウザ、配送待ちの履歴、再試行待ちの記録は保持します。"
+            alert.addButton(withTitle: "現在の履歴末尾から再開")
+            alert.addButton(withTitle: "キャンセル")
             if alert.runModal() == .alertFirstButtonReturn {
                 Task { await runRecoveryCommand(RecoveryCommandPolicy.resetSafariCursor) }
             }
         case AgentIssueCode.stateUnreadable:
-            alert.informativeText = "The encrypted Agent state cannot be opened. Resetting it can lose pending sync work and the active-profile selection. It deletes only state.sealed and its unresolved-count sidecar, preserves Safari and Chromium history plus the delivery ledger, and restarts from the current Safari baseline."
-            alert.addButton(withTitle: "Reset Agent State")
-            alert.addButton(withTitle: "Cancel")
+            alert.informativeText = "保存した同期状態を読み込めません。初期化すると、配送待ちの履歴やブラウザの選択設定を失う場合があります。SafariとChrome/Edgeの閲覧履歴は保持し、現在の履歴末尾から同期をやり直します。"
+            alert.addButton(withTitle: "同期状態を初期化して再開")
+            alert.addButton(withTitle: "キャンセル")
             if alert.runModal() == .alertFirstButtonReturn {
                 Task { await runRecoveryCommand(RecoveryCommandPolicy.resetAgentState) }
             }
         case AgentIssueCode.keychainUnavailable:
-            alert.informativeText = "The Agent-only Keychain item is unavailable. Unlock or repair Keychain access, then restart the Agent. Agent state reset is intentionally unavailable because it cannot fix Keychain access."
+            alert.informativeText = "キーチェーンのロックやアクセス許可を確認してから、「拡張機能と自動起動を設定…」で同期サービスを再起動してください。"
             alert.runModal()
         default:
-            alert.informativeText = "Run Setup & Diagnostics again."
+            alert.informativeText = "「拡張機能と自動起動を設定…」から接続設定を確認してください。"
             alert.runModal()
         }
     }
 
     private func message(for issue: String?) -> String {
         switch issue {
-        case AgentIssueCode.runtimeUnsupported: "Compatibility check failed · sync stopped"
-        case AgentIssueCode.historyIdentityChanged: "Safari history was replaced · cursor reset required"
-        case AgentIssueCode.historyAnchorInvalid: "Safari history anchor changed · cursor reset required"
-        case AgentIssueCode.safariAccessUnavailable: "Safari history unavailable · check Full Disk Access"
-        case AgentIssueCode.keychainUnavailable: "Keychain unavailable · sync stopped"
-        case AgentIssueCode.stateUnreadable: "Encrypted state unavailable · state reset available"
-        case "agentVersionMismatch": "Agent update requires restart"
-        case "legacyWriterDetected": "Legacy writer detected · sync stopped"
-        case "extensionNotConnected": "Extension not connected"
-        default: "Agent unavailable"
+        case AgentIssueCode.runtimeUnsupported: "この環境の対応確認に失敗したため同期を停止中"
+        case AgentIssueCode.historyIdentityChanged: "Safariの履歴DBが置換されたため同期を停止中"
+        case AgentIssueCode.historyAnchorInvalid: "Safariの履歴が変更されたため同期を停止中"
+        case AgentIssueCode.safariAccessUnavailable: "Safari履歴へのアクセス許可を確認してください"
+        case AgentIssueCode.keychainUnavailable: "キーチェーンにアクセスできないため同期を停止中"
+        case AgentIssueCode.stateUnreadable: "保存した同期状態を読み込めないため同期を停止中"
+        case "agentVersionMismatch": "更新した同期サービスの再起動が必要です"
+        case "legacyWriterDetected": "旧版の同期処理を検出したため同期を停止中"
+        case "extensionNotConnected": "拡張機能の接続待ちです"
+        default: "同期サービスに接続できません"
         }
     }
 
     private func showLegacyBlock(_ paths: [String]) {
-        showMessage(title: "Legacy sync writer detected", detail: "Disable the legacy writer before setup. No files were removed.\n\n" + paths.joined(separator: "\n"))
+        showMessage(title: "旧版の同期処理を検出しました", detail: "旧版の同期処理を停止してから設定してください。\n\n" + paths.joined(separator: "\n"))
     }
 
     @objc private func resolveBlockedIssue() {
@@ -429,21 +485,21 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func showCompatibility() {
         Task {
-            await refreshStatusAsync()
-            showMessage(title: "Compatibility", detail: compatibilityDescription())
+            latestHealth = try? await requestHealth()
+            showMessage(title: "このMacの対応状況", detail: compatibilityDescription())
         }
     }
 
     private func compatibilityDescription() -> String {
-        guard let health = latestHealth else { return "Compatibility has not been checked. Connect the Agent to see its status." }
+        guard let health = latestHealth else { return "対応状況は未確認です。同期サービスとの接続後に確認できます。" }
         if health.issueCode == AgentIssueCode.runtimeUnsupported {
-            return "Compatibility checks failed. Sync is stopped and pending work is retained."
+            return "対応確認に失敗したため同期を停止しています。配送待ちの履歴は保持しています。"
         }
-        guard let compatibility = health.compatibility else { return "Compatibility has not been checked yet." }
+        guard let compatibility = health.compatibility else { return "対応状況はまだ確認できていません。" }
         let runtime = compatibility.runtime
         let evidence = compatibility.status == .tested
-            ? "This environment has an end-to-end test record for this release."
-            : "Compatibility checks passed, but this release has not been end-to-end tested in this environment. Sync is permitted; iCloud arrival is not confirmed by the local checks."
+            ? "このバージョンには、この環境で端末まで同期を確認した記録があります。"
+            : "動作条件の確認には合格しています。このバージョンで端末まで同期できるかは、この環境では未検証です。"
         return "macOS \(runtime.macOSVersion) (\(runtime.macOSBuild)) · Safari \(runtime.safariBuild)\n\n\(evidence)"
     }
 
@@ -460,9 +516,9 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             await refreshStatusAsync()
             let detail = operation == RecoveryCommandPolicy.resetSafariCursor
-                ? "The Safari arrival cursor now starts at the current baseline. Pending queues and the delivery ledger were preserved."
-                : "Agent state now starts at the current Safari baseline. Safari and Chromium history plus the delivery ledger were preserved."
-            showMessage(title: "Sync recovery complete", detail: detail)
+                ? "現在のSafari履歴末尾から同期を再開しました。配送待ちの履歴は保持しています。"
+                : "同期状態を初期化し、現在のSafari履歴末尾から再開しました。SafariとChrome/Edgeの閲覧履歴は保持しています。"
+            showMessage(title: "同期を再開しました", detail: detail)
         } catch {
             NSAlert(error: error).runModal()
             await refreshStatusAsync()

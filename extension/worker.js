@@ -8,6 +8,7 @@ import {
   importedVisitEvidence,
   orderedRecentVisits,
   unseenVisitsAfterMarker,
+  visitSort,
 } from "./visit_resolution.js";
 
 const HOST = "io.github.irismouth.safari_chromium_history_sync";
@@ -15,6 +16,7 @@ const RESOLVE_ALARM = "resolve-browser-history";
 const EXCHANGE_ALARM = "exchange-history";
 const RUNTIME_KEY = "browser_runtime_v1";
 const EVIDENCE_DELAYS = [1_000, 3_000, 8_000, 18_000, 30_000];
+const REMOVAL_BATCHES_PER_EXCHANGE = 8;
 const controller = createSyncController({
   store: createChromeGenerationStore(chrome.storage.local),
 });
@@ -61,7 +63,8 @@ async function resolveDirtyVisits() {
   const state = await runtimeState();
   for (const url of Object.keys(state.dirtyUrls)) {
     if (hasPendingImport(state.pendingEvidence, url)) continue;
-    const visits = orderedRecentVisits(await chrome.history.getVisits({ url }));
+    // A persisted import marker may be older than the bounded outcome-evidence window.
+    const visits = [...await chrome.history.getVisits({ url })].sort(visitSort);
     const marker = state.visitMarkers[url];
     const dirty = state.dirtyUrls[url];
     const title = dirty && typeof dirty === "object" ? dirty.title : undefined;
@@ -182,12 +185,19 @@ async function pullSafariPage(state) {
   if (page?.type === "page") {
     state.agentCloudTracking = page.capabilities?.includes("cloud-delivery-v1") === true;
     await saveRuntime(state);
+    if (state.agentCloudTracking && state.removalEvents?.length) {
+      // Negotiation may have just enabled cancellation reporting. Discard this
+      // page and fetch it again only after the Agent has processed the cutoffs.
+      await reportRemovals(state);
+      return;
+    }
     await applySafariPage(state, page);
   }
 }
 
 export async function verifyEvidence() {
   const state = await runtimeState();
+  if (!await reportRemovals(state)) return;
   const now = Date.now();
   for (const [eventId, pending] of Object.entries(state.pendingEvidence)) {
     if (pending.dueAt > now && !pending.localReceipt && !pending.removed) continue;
@@ -214,7 +224,7 @@ export async function verifyEvidence() {
     }
     if (evidence) {
       state.visitMarkers[pending.url] = String(evidence.visitId);
-      if (!hasVisitNewerThan(visits, evidence)) delete state.dirtyUrls[pending.url];
+      if (!hasVisitNewerThan(allVisits, evidence)) delete state.dirtyUrls[pending.url];
       pending.localReceipt = {
         eventId, sequence: pending.sequence,
         visitId: String(evidence.visitId), visitTime: evidence.visitTime,
@@ -234,8 +244,22 @@ export async function verifyEvidence() {
       pending.attempt += 1;
       pending.dueAt = pending.requestedAt + EVIDENCE_DELAYS[pending.attempt - 1];
     } else if (pending.deliveryAttempt < 2) {
-      pending.preVisitIds = (await recentVisits(pending.url))
-        .map((visit) => String(visit.visitId));
+      // Re-read the exact stream position before another non-idempotent write.
+      // Rebind/removal can cancel an intent while its first evidence cycle is pending.
+      const page = await sendNative({
+        version: PROTOCOL_VERSION, operation: "pull", stream: "safariToBrowser",
+        profileId: state.profileId, afterSequence: pending.sequence - 1, limit: 1,
+      });
+      if (page?.type !== "page" || !Array.isArray(page.events)) continue;
+      if (!page.events.some((event) => event.eventId === eventId
+        && event.sequence === pending.sequence && event.url === pending.url)) {
+        delete state.pendingEvidence[eventId];
+        continue;
+      }
+      state.agentCloudTracking = page.capabilities?.includes("cloud-delivery-v1") === true;
+      const freshVisits = await recentVisits(pending.url);
+      if (importedVisitEvidence(freshVisits, pending)) continue;
+      pending.preVisitIds = freshVisits.map((visit) => String(visit.visitId));
       pending.deliveryAttempt = 2;
       pending.attempt = 1;
       pending.requestedAt = now;
@@ -260,14 +284,12 @@ export async function verifyEvidence() {
   await saveRuntime(state);
 }
 
-async function recordRemoval(details) {
+async function recordRemoval(details, removedAt) {
   const state = await runtimeState();
   state.removalEvents ??= [];
-  const removedAt = Date.now();
   const urls = new Set(details.urls ?? []);
-  const pendingUrls = new Set(Object.values(state.pendingEvidence).map((entry) => entry.url));
   for (const pending of Object.values(state.pendingEvidence)) {
-    if (details.allHistory || urls.has(pending.url)) pending.removed = true;
+    if (pending.requestedAt <= removedAt && (details.allHistory || urls.has(pending.url))) pending.removed = true;
   }
   if (details.allHistory) {
     state.removalEvents = [{ all: true, urls: [], removedAt }];
@@ -275,10 +297,22 @@ async function recordRemoval(details) {
     state.dirtyUrls = {};
     state.cloudOwnedUrls = {};
   } else {
-    const owned = [...urls].filter((url) => state.cloudOwnedUrls?.[url] || pendingUrls.has(url));
-    for (let offset = 0; offset < owned.length; offset += 128) {
-      state.removalEvents.push({ all: false, urls: owned.slice(offset, offset + 128), removedAt });
+    // Only the Agent knows every reserved queued/recovery URL, including events
+    // beyond the first item in a fetched page. It filters these against its journal.
+    let batch = [];
+    let bytes = 1024;
+    for (const url of urls) {
+      if (!isWebUrl(url)) continue;
+      const size = new TextEncoder().encode(JSON.stringify(url)).length + 1;
+      if (batch.length === 128 || bytes + size > 512 * 1024) {
+        state.removalEvents.push({ all: false, urls: batch, removedAt });
+        batch = [];
+        bytes = 1024;
+      }
+      batch.push(url);
+      bytes += size;
     }
+    if (batch.length) state.removalEvents.push({ all: false, urls: batch, removedAt });
     for (const url of urls) {
       delete state.visitMarkers[url];
       delete state.dirtyUrls[url];
@@ -289,22 +323,25 @@ async function recordRemoval(details) {
 }
 
 async function reportRemovals(state) {
-  if (!state.agentCloudTracking) return;
-  const removal = state.removalEvents?.[0];
-  if (!removal) return;
-  const response = await sendNative({
-    version: PROTOCOL_VERSION, operation: "cloudRemoval", profileId: state.profileId,
-    allHistoryRemoved: removal.all, removedURLs: removal.urls, removedAt: removal.removedAt,
-  });
-  if (isReceipt(response, "REMOVAL_RECORDED")) {
+  if (!state.agentCloudTracking) return true;
+  // Bound each turn's IPC work, but never let another writer overtake any
+  // remaining cancellation batch, including a failed or lost response.
+  for (let sent = 0; sent < REMOVAL_BATCHES_PER_EXCHANGE && state.removalEvents?.length; sent++) {
+    const removal = state.removalEvents[0];
+    const response = await sendNative({
+      version: PROTOCOL_VERSION, operation: "cloudRemoval", profileId: state.profileId,
+      allHistoryRemoved: removal.all, removedURLs: removal.urls, removedAt: removal.removedAt,
+    });
+    if (!isReceipt(response, "REMOVAL_RECORDED")) return false;
     state.removalEvents.shift();
     await saveRuntime(state);
   }
+  return !state.removalEvents?.length;
 }
 
 export async function exchange() {
   const state = await runtimeState();
-  await reportRemovals(state);
+  if (!await reportRemovals(state)) return;
   await resolveDirtyVisits();
   await verifyEvidence();
   await pushBrowserPage(state);
@@ -315,8 +352,10 @@ export async function exchange() {
 chrome.history.onVisited.addListener((item) => {
   return exclusively(() => markDirty(item)).catch(console.error);
 });
-chrome.history.onVisitRemoved.addListener((details) =>
-  exclusively(() => recordRemoval(details)).catch(console.error));
+chrome.history.onVisitRemoved.addListener((details) => {
+  const removedAt = Date.now();
+  return exclusively(() => recordRemoval(details, removedAt)).catch(console.error);
+});
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === RESOLVE_ALARM || alarm.name === EXCHANGE_ALARM) {

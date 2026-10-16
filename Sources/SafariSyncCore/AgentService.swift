@@ -121,6 +121,7 @@ public final class AgentService: @unchecked Sendable {
                 guard events.count <= safariSyncMaximumPageSize else {
                     return try encode(.failure(TypedError(code: "INVALID_PAGE")))
                 }
+                let cursor = try safariWriteCursor(state: &state)
                 var through: Int64 = 0
                 for event in events {
                     try state.cloud.reserve(id: event.eventID, profileID: message.profileID,
@@ -134,7 +135,9 @@ public final class AgentService: @unchecked Sendable {
                         eventID: event.eventID,
                         url: event.url,
                         title: event.title,
-                        deliveredAt: .now
+                        deliveredAt: .now,
+                        validating: cursor,
+                        authenticationKey: authenticationKey
                     )
                     state.deliveredSafariVisitIDs.insert(receipt.visitID)
                     try state.cloud.recordLocalDelivery(id: event.eventID, visitID: String(receipt.visitID),
@@ -216,7 +219,13 @@ public final class AgentService: @unchecked Sendable {
                     $0.profileID == message.profileID && $0.sequence <= through
                 }.map(\.eventID))
                 if message.capabilities?.contains("cloud-delivery-v1") == true {
-                    let expected = state.outbox.filter { $0.profileID == message.profileID && $0.sequence <= through }
+                    // Capability advertisement does not retroactively track legacy deliveries.
+                    // Require cloud receipts only for events reserved by a capable pull.
+                    let expected = state.outbox.filter { entry in
+                        entry.profileID == message.profileID && entry.sequence <= through
+                            && state.cloud.deliveries.contains { $0.id == entry.eventID
+                                && $0.profileID == message.profileID && $0.provider == .browser }
+                    }
                     let receipts = message.localReceipts ?? []
                     guard receipts.count <= 128, Set(receipts.map(\.eventID)).count == receipts.count,
                           Set(expected.map(\.eventID)).isSubset(of: Set(receipts.map(\.eventID))),
@@ -605,12 +614,22 @@ public final class AgentService: @unchecked Sendable {
         let queued = state.cloud.deliveries.filter { $0.profileID == state.activeProfileID
             && $0.provider == .safari && $0.localAppliedAt == nil && !$0.suppressed && state.cloud.isCurrent($0) }
         guard !queued.isEmpty else { return }
+        let cursor = try safariWriteCursor(state: &state)
         let identity = try history.cloudSnapshot(deliveries: []).databaseIdentity
         for entry in queued.prefix(128) {
-            let receipt = try history.insertBrowserVisit(eventID: entry.id, url: entry.url, title: entry.title, deliveredAt: now)
+            let receipt = try history.insertBrowserVisit(eventID: entry.id, url: entry.url, title: entry.title,
+                deliveredAt: now, validating: cursor, authenticationKey: authenticationKey)
             state.deliveredSafariVisitIDs.insert(receipt.visitID)
             try state.cloud.recordLocalDelivery(id: entry.id, visitID: String(receipt.visitID), time: receipt.deliveredAt,
                 now: now, generation: receipt.generation, databaseIdentity: identity)
         }
+    }
+
+    private func safariWriteCursor(state: inout State) throws -> SafariArrivalCursor {
+        if let cursor = state.cursor { return cursor }
+        let cursor = try history.arrivalBaseline(authenticationKey: authenticationKey)
+        state.cursor = cursor
+        try persist(state)
+        return cursor
     }
 }

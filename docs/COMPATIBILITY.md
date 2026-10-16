@@ -1,6 +1,8 @@
 # Compatibility policy
 
-## Development build 612
+## Development build 613
+
+Build 613 fixes seven reviewed recovery/cancellation/migration defects and separates daily menu operations from advanced verification. Its [validation record](validation/build-613-review-fixes.md) covers temporary-fixture checks and menu verification. It is not qualified by build 612's mobile arrival evidence. Its default `testedRuntimes` remains empty.
 
 Build 610 has [user-reported iPhone Safari/Edge arrival](validation/build-610-arrival.md), following manual Safari navigation. [Build 611](validation/build-611-assist.md) has separate recovery and user-reported arrival evidence. Build 612 replaces the helper's daily ceiling and retry policy; its [validation record](validation/build-612-assist-retry.md) separates automatic checks, Mac native progress, and mobile observations. Its default `testedRuntimes` is empty; structurally eligible environments remain usable as compatible-unverified. The build-601 validation below is historical evidence for that implementation, not a qualification of the new scheduler, receipts, diagnostics, or replay behavior. No version/hash allowlist has been introduced.
 

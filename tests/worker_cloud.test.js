@@ -181,3 +181,214 @@ test("large browser pages fit the authenticated native transport and leave the r
   assert.equal(pages.flatMap((page) => page.events).length, 100);
   assert.equal(new Set(pages.flatMap((page) => page.events.map((event) => event.eventId))).size, 100);
 });
+
+test("ACK recovery preserves all later visits when the saved receipt is outside the recent evidence window", async (t) => {
+  const h = await harness(t, { failAck: true });
+  await h.worker.exchange();
+  h.due();
+  await assert.rejects(h.worker.verifyEvidence(), /ACK response lost/);
+  const time = h.visits.get(h.event.url)[0].visitTime;
+  for (let id = 2; id <= 66; id++) {
+    h.visits.get(h.event.url).push({ visitId: String(id), visitTime: time + id });
+  }
+  await h.listeners.visited({ url: h.event.url });
+  const restarted = await h.restart();
+  await restarted.verifyEvidence();
+  assert.ok(h.stored[runtimeKey].dirtyUrls[h.event.url], "later visits remain dirty after ACK recovery");
+  await restarted.exchange();
+  const published = h.requests.filter((request) => request.operation === "publish");
+  assert.equal(published.flatMap((page) => page.events).length, 65);
+  assert.equal(h.adds, 1, "receipt recovery never repeats the imported visit");
+});
+
+test("a cancelled account probe is checked with the Agent before a second addUrl", async (t) => {
+  const h = await harness(t);
+  await h.worker.exchange();
+  h.visits.set(h.event.url, []);
+  const pending = h.stored[runtimeKey].pendingEvidence[h.event.eventId];
+  pending.attempt = 5;
+  pending.deliveryAttempt = 1;
+  pending.dueAt = 0;
+  const native = chrome.runtime.sendNativeMessage;
+  chrome.runtime.sendNativeMessage = async (host, message) => {
+    if (message.operation === "pull") {
+      h.requests.push(structuredClone(message));
+      return { type: "page", events: [], capabilities: ["cloud-delivery-v1"] };
+    }
+    return native(host, message);
+  };
+  await h.worker.verifyEvidence();
+  assert.equal(h.adds, 1, "a removed old-binding event must not be inserted again");
+  assert.deepEqual(h.stored[runtimeKey].pendingEvidence, {});
+});
+
+for (const precedingRemovals of [0, 128, 1024]) {
+test(`deleting a reserved URL after ${precedingRemovals} other removals cancels it before insertion`, async (t) => {
+  const h = await harness(t);
+  const second = { eventId: "queued-second", sequence: 2, url: "https://example.com/queued-second" };
+  let queue = [h.event, second];
+  h.visits.set(second.url, [{ visitId: "old", visitTime: Date.now() - 10000 }]);
+  const native = chrome.runtime.sendNativeMessage;
+  chrome.runtime.sendNativeMessage = async (host, message) => {
+    if (message.operation === "pull") {
+      return { type: "page", events: structuredClone(queue), capabilities: ["cloud-delivery-v1"] };
+    }
+    if (message.operation === "ack") {
+      queue = queue.filter((event) => event.sequence > message.throughSequence);
+      return { type: "receipt", status: "ACKNOWLEDGED", throughSequence: message.throughSequence };
+    }
+    if (message.operation === "cloudRemoval") {
+      queue = queue.filter((event) => !message.removedURLs.includes(event.url));
+    }
+    return native(host, message);
+  };
+  await h.worker.exchange();
+  h.visits.set(second.url, []);
+  const removed = Array.from({ length: precedingRemovals }, (_, index) => `https://example.com/removed-${index}`);
+  removed.push(second.url);
+  await h.listeners.removed({ allHistory: false, urls: removed });
+  h.due();
+  await h.worker.verifyEvidence();
+  await h.worker.exchange();
+  const removals = h.requests.filter((request) => request.operation === "cloudRemoval");
+  assert.deepEqual(removals.flatMap((request) => request.removedURLs), removed);
+  assert.deepEqual(h.stored[runtimeKey].removalEvents, []);
+  assert.equal(h.adds, 1, "the deleted queued URL never reaches the writer");
+});
+}
+
+test("removal cutoff is the notification time even when the worker queue is blocked", async (t) => {
+  const h = await harness(t);
+  await h.worker.exchange();
+  const originalNow = Date.now;
+  t.after(() => { Date.now = originalNow; });
+  const base = originalNow();
+  let now = base;
+  Date.now = () => now;
+  let release;
+  let entered;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const began = new Promise((resolve) => { entered = resolve; });
+  const get = chrome.storage.local.get;
+  chrome.storage.local.get = async (key) => { entered(); await gate; return get(key); };
+  const earlier = h.listeners.visited({ url: "https://example.com/queue-blocker" });
+  await began;
+  const removal = h.listeners.removed({ allHistory: false, urls: [h.event.url] });
+  now = base + 1000;
+  release();
+  await earlier;
+  await removal;
+  await h.worker.exchange();
+  assert.equal(h.requests.find((request) => request.operation === "cloudRemoval").removedAt, base);
+});
+
+test("an upgraded worker drains a legacy pending ACK before negotiating cloud tracking", async (t) => {
+  const h = await harness(t);
+  await h.worker.exchange();
+  delete h.stored[runtimeKey].agentCloudTracking;
+  h.due();
+  const native = chrome.runtime.sendNativeMessage;
+  chrome.runtime.sendNativeMessage = async (host, message) => {
+    if (message.operation === "ack") {
+      // A capable client may still ACK an untracked event from the previous Agent.
+      assert.equal(message.localReceipts, undefined);
+    }
+    return native(host, message);
+  };
+  const restarted = await h.restart();
+  await restarted.exchange();
+  assert.deepEqual(h.stored[runtimeKey].pendingEvidence, {});
+  assert.equal(h.stored[runtimeKey].agentCloudTracking, true, "a subsequent pull negotiates the new receipt format");
+  assert.equal(h.adds, 1);
+});
+
+test("a still-queued delivery retries, but Agent errors preserve it without another write", async (t) => {
+  const h = await harness(t);
+  await h.worker.exchange();
+  h.visits.set(h.event.url, []);
+  const pending = h.stored[runtimeKey].pendingEvidence[h.event.eventId];
+  pending.attempt = 5;
+  pending.dueAt = 0;
+  const native = chrome.runtime.sendNativeMessage;
+  chrome.runtime.sendNativeMessage = async () => ({ type: "error", code: "PROFILE_NOT_ACTIVE" });
+  await h.worker.verifyEvidence();
+  assert.equal(h.adds, 1);
+  assert.ok(h.stored[runtimeKey].pendingEvidence[h.event.eventId]);
+  chrome.runtime.sendNativeMessage = native;
+  await h.worker.verifyEvidence();
+  assert.equal(h.adds, 2);
+  assert.equal(h.requests.at(-1).operation, "pull");
+  assert.equal(h.requests.at(-1).afterSequence, h.event.sequence - 1);
+  assert.equal(h.requests.at(-1).limit, 1);
+  h.due();
+  await h.worker.verifyEvidence();
+  assert.deepEqual(h.stored[runtimeKey].pendingEvidence, {});
+});
+
+test("evidence arriving during retry authorization prevents a duplicate browser visit", async (t) => {
+  const h = await harness(t);
+  await h.worker.exchange();
+  h.visits.set(h.event.url, []);
+  const pending = h.stored[runtimeKey].pendingEvidence[h.event.eventId];
+  pending.attempt = 5;
+  pending.dueAt = 0;
+  const native = chrome.runtime.sendNativeMessage;
+  chrome.runtime.sendNativeMessage = async (host, message) => {
+    if (message.operation === "pull") {
+      h.visits.set(h.event.url, [{ visitId: "late-first-write", visitTime: Date.now() }]);
+    }
+    return native(host, message);
+  };
+  await h.worker.verifyEvidence();
+  await h.worker.verifyEvidence();
+  assert.equal(h.adds, 1);
+  assert.equal(h.requests.find((request) => request.operation === "ack").localReceipts[0].visitId, "late-first-write");
+});
+
+test("removal notifications cover queued URLs in bounded native messages", async (t) => {
+  const h = await harness(t, { noImport: true });
+  await h.worker.exchange();
+  const urls = Array.from({ length: 130 }, (_, index) => `https://example.com/${index}/` + "x".repeat(7000));
+  await h.listeners.removed({ allHistory: false, urls });
+  for (let page = 0; page < 3; page++) await h.worker.exchange();
+  const removals = h.requests.filter((request) => request.operation === "cloudRemoval");
+  assert.deepEqual(removals.flatMap((request) => request.removedURLs), urls);
+  for (const removal of removals) {
+    assert.ok(removal.removedURLs.length <= 128);
+    assert.ok(new TextEncoder().encode(JSON.stringify(removal)).length < 512 * 1024);
+  }
+});
+
+test("unacknowledged removal batches block exchanges and evidence retries until they are delivered", async (t) => {
+  const h = await harness(t);
+  await h.worker.exchange();
+  h.visits.set(h.event.url, []);
+  const pending = h.stored[runtimeKey].pendingEvidence[h.event.eventId];
+  pending.attempt = 5;
+  pending.dueAt = 0;
+  await h.listeners.removed({ allHistory: false, urls: ["https://example.com/queued-elsewhere"] });
+  const native = chrome.runtime.sendNativeMessage;
+  chrome.runtime.sendNativeMessage = async (host, message) => message.operation === "cloudRemoval"
+    ? { type: "error", code: "UNAVAILABLE" } : native(host, message);
+  const pulls = h.requests.filter((request) => request.operation === "pull").length;
+  await h.worker.verifyEvidence();
+  await h.worker.exchange();
+  assert.equal(h.adds, 1, "neither callback nor exchange may write past pending cancellations");
+  assert.equal(h.requests.filter((request) => request.operation === "pull").length, pulls);
+  assert.equal(h.stored[runtimeKey].removalEvents.length, 1);
+  chrome.runtime.sendNativeMessage = native;
+  await h.worker.exchange();
+  assert.deepEqual(h.stored[runtimeKey].removalEvents, []);
+  assert.equal(h.adds, 2, "a still-current retry resumes once cancellation reporting recovers");
+});
+
+test("initial capability negotiation reports old removals and refetches before writing a page", async (t) => {
+  const h = await harness(t);
+  await h.listeners.removed({ allHistory: false, urls: ["https://example.com/previous-removal"] });
+  await h.worker.exchange();
+  assert.equal(h.adds, 0, "a page fetched before cancellation reporting must not be applied");
+  assert.deepEqual(h.requests.map((request) => request.operation), ["pull", "cloudRemoval"]);
+  await h.worker.exchange();
+  assert.equal(h.adds, 1);
+  assert.deepEqual(h.requests.map((request) => request.operation), ["pull", "cloudRemoval", "pull"]);
+});
