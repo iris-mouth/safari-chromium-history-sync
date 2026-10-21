@@ -4,15 +4,15 @@ Safari Chromium History Sync keeps **new** history visits synchronized in both d
 
 Version 6 is a history-only rewrite. It intentionally does not sync bookmarks, Reading List, tabs, tab groups, deletions, or old history. It does not use Chrome as an Edge hub. A Safari visit delivered to Chrome/Edge is a new delivery-time visit because Chromium cannot preserve an external visit timestamp.
 
-The working tree is **6.1.4 / build 614**, an unpublished development build restoring English menus and dialogs while retaining the clearer actions and separate test controls. See the [build 614 validation record](docs/validation/build-614-english-ui.md) and [build 613 recovery fixes](docs/validation/build-613-review-fixes.md). [Build 610 mobile arrival](docs/validation/build-610-arrival.md), [build 611 recovery/arrival](docs/validation/build-611-assist.md), and [build 612 automatic retries and arrival](docs/validation/build-612-assist-retry.md) are evidence for those earlier implementations. Build 614 remains compatible-unverified. The downloadable v6.0.0 release below does not include these features.
+The current release is **6.1.4 / build 614**, an experimental prerelease restoring English menus and dialogs while retaining the clearer actions and separate test controls. See the [build 614 validation record](docs/validation/build-614-english-ui.md) and [build 613 recovery fixes](docs/validation/build-613-review-fixes.md). [Build 610 mobile arrival](docs/validation/build-610-arrival.md), [build 611 recovery/arrival](docs/validation/build-611-assist.md), and [build 612 automatic retries and arrival](docs/validation/build-612-assist-retry.md) are evidence for those earlier implementations. Build 614 has user-reported receiving-device Safari/Edge arrival; its runtime diagnostics retain the compatible-unverified label.
 
 ## Download
 
-[Download v6.0.0 and read the release notes](https://github.com/iris-mouth/safari-chromium-history-sync/releases/tag/v6.0.0).
+[Download v6.1.4 and read the release notes](https://github.com/iris-mouth/safari-chromium-history-sync/releases/tag/v6.1.4).
 
 This is an **experimental prerelease for Apple silicon Macs**, requiring macOS 26.6.2 or later and a compatible Safari history database. OS/Safari version changes alone do not block synchronization. The app distinguishes **tested environments** from **compatible, unverified environments** in its Compatibility diagnostics. Intel binaries are not included.
 
-Download `Safari-Chromium-History-Sync-v6.0.0-arm64.pkg` and `SHA256SUMS.txt` into the same folder. To check the download, run `shasum -a 256 -c SHA256SUMS.txt` from that folder, then follow the installation steps below.
+Download `Safari-Chromium-History-Sync-v6.1.4-arm64.pkg` and `SHA256SUMS.txt` into the same folder. To check the download, run `shasum -a 256 -c SHA256SUMS.txt` from that folder, then follow the installation steps below.
 
 The PKG is unsigned and the apps are ad-hoc signed, without Developer ID signing or Apple notarization. macOS may block installation or first launch. If you trust this release, follow [Apple's instructions for opening an app from an unidentified developer](https://support.apple.com/en-us/102445). This release has not been validated through a fresh download/install on a separate Mac.
 
@@ -47,7 +47,7 @@ The packaging script creates both standalone app bundles and a payload-only PKG 
 
 ## Install
 
-1. Install the downloaded `Safari-Chromium-History-Sync-v6.0.0-arm64.pkg` (or `Safari-Chromium-History-Sync.pkg` from a local build). For a local development build, you may instead move both generated app bundles beside each other in `/Applications`.
+1. Install the downloaded `Safari-Chromium-History-Sync-v6.1.4-arm64.pkg` (or `Safari-Chromium-History-Sync.pkg` from a local build). For a local development build, you may instead move both generated app bundles beside each other in `/Applications`.
 2. Open **Safari Chromium History Sync**. Open **Set Up Extensions & Login…** and choose **Start Setup** (v6.0.0 labels: Setup & Diagnostics / Start Setup).
 3. Select Chrome Stable, Edge Stable, or both. Setup writes a Native Messaging manifest only for browsers you explicitly select; it does not create files for an installed but unused browser.
 4. Setup opens each selected browser's extensions page and reveals the bundled `ChromiumExtension` folder. Turn on Developer mode, choose **Load unpacked**, and select that folder. Extension and profile IDs are detected automatically; there is nothing to copy and paste.
