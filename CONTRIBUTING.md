@@ -4,7 +4,7 @@ Contributions should keep the project local, inspectable, and reversible.
 
 ## Setup
 
-Build the app, open it, and use **拡張機能と自動起動を設定… → 設定を開始** to select only the browser under test. Load the extension from the app's bundled `ChromiumExtension` folder. Do not start synchronization until the legacy writer is stopped.
+Build the app, open it, and use **Set Up Extensions & Login… → Start Setup** to select only the browser under test. Load the extension from the app's bundled `ChromiumExtension` folder. Do not start synchronization until the legacy writer is stopped.
 
 Run checks before opening a PR:
 
@@ -18,6 +18,10 @@ Run checks before opening a PR:
 including read-only status opening and initially collapsed test actions. It
 excludes the app entry point so it cannot launch or contact the installed Agent.
 It is part of `scripts/check.sh` and does not navigate any real browser.
+
+Keep product-authored menu and dialog text in English. Action labels should
+describe what happens when selected; test and repair actions stay in the
+initially collapsed section of Detailed Diagnostics.
 
 ## Testing Safely
 
@@ -45,4 +49,4 @@ Include:
 
 Avoid committing sealed state, delivery ledgers, Safari databases, browser profile files, or screenshots that reveal private URLs.
 
-When changing setup behavior, verify Chrome-only, Edge-only, and both-browser selections. An unselected browser must not gain a Native Messaging directory or manifest. Use the app's **拡張機能と自動起動を設定…** screen for installation checks rather than introducing a second shell implementation.
+When changing setup behavior, verify Chrome-only, Edge-only, and both-browser selections. An unselected browser must not gain a Native Messaging directory or manifest. Use the app's **Set Up Extensions & Login…** screen for installation checks rather than introducing a second shell implementation.

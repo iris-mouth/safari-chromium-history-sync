@@ -1,5 +1,9 @@
 # Compatibility policy
 
+## Development build 614
+
+Build 614 restores English menu and dialog text without changing the sync engine. Its [validation record](validation/build-614-english-ui.md) separates local checks from receiving-device arrival evidence. It retains the compatible-unverified label and an empty `testedRuntimes` list.
+
 ## Development build 613
 
 Build 613 fixes seven reviewed recovery/cancellation/migration defects and separates daily menu operations from advanced verification. Its [validation record](validation/build-613-review-fixes.md) covers temporary-fixture checks and menu verification. It is not qualified by build 612's mobile arrival evidence. Its default `testedRuntimes` remains empty.

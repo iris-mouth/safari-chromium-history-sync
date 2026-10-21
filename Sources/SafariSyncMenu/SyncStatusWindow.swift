@@ -5,7 +5,7 @@ import SafariSyncCore
 @MainActor
 final class SyncStatusWindow: NSWindowController {
     private let request: (MenuCommand) async throws -> Data
-    private let status = NSTextField(wrappingLabelWithString: "同期状況を確認中…")
+    private let status = NSTextField(wrappingLabelWithString: "Checking sync status…")
     private let browser = NSTextField(wrappingLabelWithString: "")
     private let pending = NSTextField(wrappingLabelWithString: "")
     private let safari = NSTextField(wrappingLabelWithString: "")
@@ -14,9 +14,9 @@ final class SyncStatusWindow: NSWindowController {
 
     init(request: @escaping (MenuCommand) async throws -> Data) {
         self.request = request
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 390),
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 420),
             styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
-        window.title = "履歴の同期状況"
+        window.title = "History Sync Status"
         window.isReleasedWhenClosed = false
         super.init(window: window)
         let stack = NSStackView()
@@ -33,14 +33,14 @@ final class SyncStatusWindow: NSWindowController {
         ])
         status.font = .boldSystemFont(ofSize: 17)
         let explanation = NSTextField(wrappingLabelWithString:
-            "iPhone／iPadへの到達は、端末のブラウザで履歴を確認してください。Safari側の進行状況だけでは、個々の履歴の到達を確定できません。")
+            "Check the browser history on your iPhone or iPad to confirm arrival. Safari's sync progress alone does not confirm that an individual visit reached another device.")
         explanation.textColor = .secondaryLabelColor
         for field in [status, browser, pending, safari, assist, explanation] {
             stack.addArrangedSubview(field)
             field.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         }
-        let refresh = NSButton(title: "状態表示を更新", target: self, action: #selector(refresh))
-        refresh.toolTip = "表示だけを更新します。テスト履歴の追加や設定変更は行いません。"
+        let refresh = NSButton(title: "Refresh Status", target: self, action: #selector(refresh))
+        refresh.toolTip = "Refresh the display without adding test history or changing settings."
         stack.addArrangedSubview(refresh)
         window.center()
     }
@@ -62,8 +62,8 @@ final class SyncStatusWindow: NSWindowController {
                 }
                 display(health: health, diagnostics: diagnostics)
             } catch {
-                status.stringValue = "同期状況を取得できませんでした"
-                browser.stringValue = "メニューの「問題を調べる」から接続状態を確認してください。"
+                status.stringValue = "Could not load sync status"
+                browser.stringValue = "Check the connection under Troubleshooting in the menu."
                 pending.stringValue = ""
                 safari.stringValue = ""
                 assist.stringValue = ""
@@ -73,22 +73,22 @@ final class SyncStatusWindow: NSWindowController {
 
     func display(health: HealthSnapshot, diagnostics: CloudDiagnostics?) {
         let profile = health.connectedProfiles.first { $0.profileID == health.activeProfileID }
-        status.stringValue = health.runtimeState == "blocked" || !health.enabled ? "同期が停止しています"
-            : health.runtimeState == "initializing" ? "同期サービスを起動中…"
-            : health.activeProfileID == nil && !health.connectedProfiles.isEmpty ? "同期するブラウザを選んでください"
-            : profile == nil ? "ブラウザ拡張機能の接続待ち" : "履歴の同期を実行中"
-        browser.stringValue = "同期するブラウザ：\(profile?.displayName ?? (health.activeProfileID == nil ? "未選択" : "接続待ち"))"
-        pending.stringValue = "ブラウザへの配送待ち：\(health.pendingSafariToBrowser)件\n配送失敗後の自動再試行待ち：\(health.recoveryCount)件"
+        status.stringValue = health.runtimeState == "blocked" || !health.enabled ? "Sync is stopped"
+            : health.runtimeState == "initializing" ? "Starting sync service…"
+            : health.activeProfileID == nil && !health.connectedProfiles.isEmpty ? "Choose a browser to sync"
+            : profile == nil ? "Waiting for browser extension" : "History sync is running"
+        browser.stringValue = "Browser to sync: \(profile?.displayName ?? (health.activeProfileID == nil ? "Not selected" : "Waiting for connection"))"
+        pending.stringValue = "Pending browser deliveries: \(health.pendingSafariToBrowser)\nWaiting for automatic retry: \(health.recoveryCount)"
         if let cloud = diagnostics?.summary {
-            safari.stringValue = "Safari側の同期待ち：\(cloud.safariPending)件\n端末で到達を確認した記録：\(cloud.remoteSeen)件"
+            safari.stringValue = "Waiting for Safari sync: \(cloud.safariPending)\nArrival confirmed on device: \(cloud.remoteSeen)"
         } else {
-            safari.stringValue = health.runtimeState == "blocked" ? "「問題を調べる」から停止原因と復旧方法を確認してください。" : ""
+            safari.stringValue = health.runtimeState == "blocked" ? "Open Troubleshooting to view the cause and recovery options." : ""
         }
         if let diagnostics, let scheduler = diagnostics.safariAssist {
-            assist.stringValue = "専用タブによるSafariの自動同期補助：\(scheduler.enabled ? "有効" : "無効")"
+            assist.stringValue = "Automatic Safari sync assist (dedicated tab): \(scheduler.enabled ? "Enabled" : "Disabled")"
             if scheduler.enabled, let next = scheduler.nextAttemptAt, diagnostics.summary.safariPending > 0 {
-                assist.stringValue += "\n次に処理を試す時刻：\(next.formatted(date: .abbreviated, time: .shortened))"
+                assist.stringValue += "\nNext automatic attempt: \(next.formatted(date: .abbreviated, time: .shortened))"
             }
-        } else { assist.stringValue = "専用タブによるSafariの自動同期補助：無効" }
+        } else { assist.stringValue = "Automatic Safari sync assist (dedicated tab): Disabled" }
     }
 }

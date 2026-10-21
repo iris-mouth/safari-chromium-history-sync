@@ -26,7 +26,7 @@ import SafariSyncCore
         let diagnostics = cloud.diagnostics(profileID: "edge:preview")
         let health = HealthSnapshot(enabled: true, activeProfileID: "edge:preview", runtimeState: "ready",
             connectedProfiles: [BrowserProfileDescriptor(profileID: "edge:preview", browserFamily: "edge",
-                displayName: "Microsoft Edge · 個人用プロファイル", extensionVersion: "6.1.3", lastSeen: now, active: true)],
+                displayName: "Microsoft Edge · 個人用プロファイル", extensionVersion: "6.1.4", lastSeen: now, active: true)],
             pendingBrowserToSafari: 0, pendingSafariToBrowser: 2, recoveryCount: 1, unrecoverableCount: 0,
             cloud: diagnostics.summary)
         var statusRequests: [String] = []
@@ -51,9 +51,9 @@ import SafariSyncCore
         detailed.refresh()
         for _ in 0..<20 { try await Task.sleep(for: .milliseconds(10)) }
         let nodes = descendants(detailed.window!.contentView!)
-        let testButtons = nodes.compactMap { $0 as? NSButton }.filter { $0.title.contains("テスト履歴") }
+        let testButtons = nodes.compactMap { $0 as? NSButton }.filter { $0.title.contains("Add Test History") }
         precondition(testButtons.count == 2 && testButtons.allSatisfy(\.isHiddenOrHasHiddenAncestor))
-        let disclosure = nodes.compactMap { $0 as? NSButton }.first { $0.title == "検証・詳細操作を表示" }!
+        let disclosure = nodes.compactMap { $0 as? NSButton }.first { $0.title == "Show Tests & Advanced Actions" }!
         disclosure.performClick(nil)
         precondition(testButtons.allSatisfy { !$0.isHiddenOrHasHiddenAncestor })
         precondition(diagnosticRequests == ["cloudStatus"], "expansion must not perform a test or repair")
