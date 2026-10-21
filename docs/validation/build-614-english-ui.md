@@ -53,15 +53,15 @@ Compatibility checks passed; the runtime is compatible-unverified.
   assist. Its English explanation and Refresh Status button fit the window.
   No live setup/recovery confirmation was executed to test translated text.
 
-## Receiving-device check in progress
+## Receiving-device results (user-reported)
 
 Two new example.com probes were created through authenticated Menu commands and
 normal delivery paths, without manually operating Safari:
 
-| Intended receiving browser | Search token | Local outcome |
-| --- | --- | --- |
-| Safari | `8260349A` | Added to Safari; waiting for native progress |
-| Edge | `0DD9ED10` | Exact browser visit receipt received |
+| Intended receiving browser | Search token | Local outcome | Receiver result |
+| --- | --- | --- | --- |
+| Safari | `8260349A` | Added; checkpoint 957 covers generation 956 | User reported arrival |
+| Edge | `0DD9ED10` | Exact browser visit receipt received | User reported arrival |
 
 Full test URLs use `/safari-history-sync-probe/` followed by
 `8260349A-3EB8-4FDA-88F8-C67F1C904946` and
@@ -70,9 +70,17 @@ The Agent automatically reused its dedicated Safari tab about 97 seconds after
 the Safari probe was added (`lastTrigger=tabReused`). No manual Safari navigation
 or explicit helper trigger was used. At that observation, the native checkpoint
 was still 950 versus the probe generation 956; helper execution is not treated
-as a native sync completion or a receiving-device receipt.
+as a native sync completion or a receiving-device receipt. A later observation
+showed checkpoint 957 covering generation 956 and zero pending Safari work.
 
 The user was asked to search receiving-device history without opening either URL
-first. Receiver evidence is pending; no arrival has been inferred from local
-insertion, helper activity, or Safari's checkpoint. Earlier mobile observations
-do not qualify build 614. The compatibility allowlist remains unchanged.
+first. The user first reported Edge present and Safari absent, then reported
+Safari present too. Both owned probes were recorded as `seen` with user-reported
+receiver evidence through the normal observation command. The results were read
+back: two new arrival records, bringing the stored total from six to eight.
+Neither local insertion, helper activity, nor Safari's checkpoint was used as a
+substitute for that report. This does not separately certify both iPhone and iPad
+hardware or other visits. The compatibility allowlist remains unchanged.
+
+The English UI/source change and installation checks are committed in
+`e215cb2`. This follow-up records the subsequently reported arrival results.
