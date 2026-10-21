@@ -2,15 +2,22 @@
 
 Contributions should keep the project local, inspectable, and reversible.
 
-## Setup
+## Build
 
-Build the app, open it, and use **Set Up Extensions & Login… → Start Setup** to select only the browser under test. Load the extension from the app's bundled `ChromiumExtension` folder. Do not start synchronization until the legacy writer is stopped.
-
-Run checks before opening a PR:
+Source builds require Apple command-line build tools and Node.js for the tests.
+Python and Node.js are not runtime dependencies. Run checks before packaging or
+opening a PR:
 
 ```sh
 ./scripts/check.sh
+./scripts/package-app.sh
 ```
+
+The generated app bundles and `Safari-Chromium-History-Sync.pkg` are in `dist/`.
+
+## Setup
+
+Build the app, open it, and use **Set Up Extensions & Login… → Start Setup** to select only the browser under test. Load the extension from the app's bundled `ChromiumExtension` folder. Do not start synchronization until the legacy writer is stopped.
 
 `./scripts/package-app.sh` creates ad-hoc-signed app bundles and an unsigned, payload-only PKG for local testing. The PKG must continue to contain only the two sibling app bundles under `/Applications`; do not add installer scripts, store-distribution machinery, or user-specific Native Messaging files to it.
 
