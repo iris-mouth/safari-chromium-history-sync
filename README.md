@@ -27,7 +27,7 @@ notarization. See the [release notes](docs/RELEASE-v6.1.4.md) before installing.
 ## Install
 
 1. Install the PKG. It places the app and its Agent in `/Applications`.
-2. Open **Safari Chromium History Sync**, then choose **Set Up Extensions & Login…
+2. Open **Safari Chromium History Sync**, then choose **Settings… → General → Set Up Extensions & Login…
    → Start Setup**.
 3. Select Chrome Stable, Edge Stable, or both.
 4. Setup opens each selected browser's extensions page and reveals the bundled
@@ -35,8 +35,7 @@ notarization. See the [release notes](docs/RELEASE-v6.1.4.md) before installing.
    and select that folder.
 5. Approve **Open at Login** if requested. Grant **Full Disk Access** only to
    **Safari Chromium History Sync Agent.app**.
-6. If several browser profiles connect, choose the one to sync with Safari.
-   A single connected profile is selected automatically.
+6. In the development build, select a profile under **Settings… → History Collection**, enable collection, then choose **Browser Sync → Connect Selected Profile**. After initial collection completes, enable browser sync if desired.
 
 When upgrading, quit the menu app, install the new PKG, reopen the app, and reload
 its unpacked browser extension. macOS may ask you to restore the Agent's existing
@@ -44,12 +43,12 @@ permissions. Stop the legacy Python writer before using version 6.
 
 ## Use
 
-- **View Sync Status…** shows the active browser and pending deliveries.
-- **Choose Browser to Sync…** switches the active browser profile.
+- **View Status** shows history collection, the Web Viewer, and browser sync. **Open History** opens the configured Viewer.
+- **Collect Now** refreshes the two selected sources. **Settings… → History Collection** changes the Chromium profile.
 - **Configure Safari Sync Assist…** enables automatic help for pending Safari
   sync using a dedicated tab. This requires Safari Automation permission and
   creates real browsing history for the helper page.
-- **Troubleshooting** contains compatibility checks, recovery options, and
+- **Settings… → General** contains compatibility checks, recovery options, and
   detailed diagnostics.
 
 For history to reach your iPhone or iPad, enable the browser's built-in history
@@ -62,14 +61,11 @@ prove arrival.
 The development PKG adds a separate history collector and Web viewer; these are
 not included in the v6.1.4 release linked above. Grant Full Disk Access to
 **Safari Chromium History Sync Agent.app**, then use **Configure History
-Collection…** to choose the Safari, Chrome and Edge profiles to collect. These
-selections are independent of the single browser profile used for sync. Pausing
-collection keeps the collected records; removing a source removes its records
-from the viewer, without deleting the browser's history.
+Collection…** to collect Safari and one Chrome or Edge profile. The Agent routes new visits from this database when browser sync is enabled. Pausing collection also pauses sync. Switching profiles removes the previous Chromium records from the Viewer and cancels pending deliveries after confirmation. Browser history and Safari’s collected records are preserved.
 
 Build 626 embeds the Agent inside the main application. **Show Agent for Full Disk Access** reveals the exact helper to grant permission to. When upgrading, quit the old menu app and reload the bundled extension in each configured profile. While Chrome or Edge has an exclusive database lock, the last confirmed records remain visible until a read transaction succeeds.
 
-Enable the viewer in **Configure Web Viewer…** with the owner's Tailscale login and the HTTPS root URL. The gateway obtains a certificate for that host and checks the forwarded client identity with Tailscale. For a dedicated HTTPS port, configure raw TCP forwarding with PROXY protocol v2. Check the existing mapping before replacing it.
+Enable the viewer in **Settings… → Web Viewer** with the owner's Tailscale login and the HTTPS root URL. The gateway obtains a certificate for that host and checks the forwarded client identity with Tailscale. For a dedicated HTTPS port, configure raw TCP forwarding with PROXY protocol v2. Check the existing mapping before replacing it.
 
 ```sh
 tailscale serve status

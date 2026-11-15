@@ -51,10 +51,15 @@ async function harness(t, { capabilities = ["cloud-delivery-v1"], failAck = fals
     },
     runtime: {
       getManifest() { return { version: "6.0" }; },
+      onMessage: { addListener(callback) { listeners.message = callback; } },
       onInstalled: { addListener() {} }, onStartup: { addListener() {} },
       async sendNativeMessage(host, message) {
         requests.push(structuredClone(message));
-        if (message.operation === "publish" && failPublish) throw new Error("Agent stopped");
+        if (message.operation === "collectionPolicy") return { revision: "fixture", collect: true, sync: true };
+        if (message.operation === "candidateVisits") return [];
+        if (message.operation === "collectRemoval") return { state: "removed" };
+        if (message.operation === "collectVisits" && !failPublish) return { state: "collected" };
+        if (message.operation === "collectVisits" && failPublish) throw new Error("Agent stopped");
         if (message.operation === "pull") {
           return { type: "page", stream: "safariToBrowser", events: complete ? [] : [event],
             hasMore: false, ...(capabilities ? { capabilities } : {}) };
@@ -156,13 +161,13 @@ test("durable import markers suppress echoes but allow a later real visit to the
   await h.worker.verifyEvidence();
   await h.listeners.visited({ url: h.event.url });
   await h.worker.exchange();
-  assert.equal(h.requests.filter((request) => request.operation === "publish").length, 0);
+  assert.equal(h.requests.filter((request) => request.operation === "collectVisits").length, 0);
   h.visits.get(h.event.url).push({ visitId: "2", visitTime: Date.now() + 10 });
   await h.listeners.visited({ url: h.event.url });
   await h.worker.exchange();
-  const published = h.requests.filter((request) => request.operation === "publish");
+  const published = h.requests.filter((request) => request.operation === "collectVisits");
   assert.equal(published.length, 1);
-  assert.equal(published[0].events[0].url, h.event.url);
+  assert.equal(published[0].visits[0].url, h.event.url);
   assert.equal(h.adds, 1);
 });
 
@@ -174,14 +179,14 @@ test("large browser pages fit the authenticated native transport and leave the r
     await h.listeners.visited({ url });
   }
   await h.worker.exchange();
-  const first = h.requests.find((request) => request.operation === "publish");
+  const first = h.requests.find((request) => request.operation === "collectVisits");
   assert.ok(new TextEncoder().encode(JSON.stringify(first)).length < 512 * 1024);
-  assert.ok(first.events.length > 0 && first.events.length < 100);
+  assert.ok(first.visits.length > 0 && first.visits.length < 100);
   await h.worker.exchange();
   await h.worker.exchange();
-  const pages = h.requests.filter((request) => request.operation === "publish");
-  assert.equal(pages.flatMap((page) => page.events).length, 100);
-  assert.equal(new Set(pages.flatMap((page) => page.events.map((event) => event.eventId))).size, 100);
+  const pages = h.requests.filter((request) => request.operation === "collectVisits");
+  assert.equal(pages.flatMap((page) => page.visits).length, 100);
+  assert.equal(new Set(pages.flatMap((page) => page.visits.map((event) => event.visitId))).size, 100);
 });
 
 test("ACK recovery preserves all later visits when the saved receipt is outside the recent evidence window", async (t) => {
@@ -198,8 +203,8 @@ test("ACK recovery preserves all later visits when the saved receipt is outside 
   await restarted.verifyEvidence();
   assert.ok(h.stored[runtimeKey].dirtyUrls[h.event.url], "later visits remain dirty after ACK recovery");
   await restarted.exchange();
-  const published = h.requests.filter((request) => request.operation === "publish");
-  assert.equal(published.flatMap((page) => page.events).length, 65);
+  const published = h.requests.filter((request) => request.operation === "collectVisits");
+  assert.equal(published.flatMap((page) => page.visits).length, 65);
   assert.equal(h.adds, 1, "receipt recovery never repeats the imported visit");
 });
 
@@ -389,10 +394,10 @@ test("initial capability negotiation reports old removals and refetches before w
   await h.listeners.removed({ allHistory: false, urls: ["https://example.com/previous-removal"] });
   await h.worker.exchange();
   assert.equal(h.adds, 0, "a page fetched before cancellation reporting must not be applied");
-  assert.deepEqual(h.requests.map((request) => request.operation), ["pull", "cloudRemoval"]);
+  assert.deepEqual(h.requests.map((request) => request.operation).filter(operation => ["pull","cloudRemoval"].includes(operation)), ["pull", "cloudRemoval"]);
   await h.worker.exchange();
   assert.equal(h.adds, 1);
-  assert.deepEqual(h.requests.map((request) => request.operation), ["pull", "cloudRemoval", "pull"]);
+  assert.deepEqual(h.requests.map((request) => request.operation).filter(operation => ["pull","cloudRemoval"].includes(operation)), ["pull", "cloudRemoval", "pull"]);
 });
 
 
@@ -402,10 +407,10 @@ test("queued browser visits are checked against source history before replay", a
   h.visits.set(url, [{ visitId: "42", visitTime: Date.now() }]);
   await h.listeners.visited({ url, title: "Visit", lastVisitTime: Date.now() });
   await assert.rejects(h.worker.exchange(), /Agent stopped/);
-  assert.equal(h.requests.filter((request) => request.operation === "publish").length, 1);
+  assert.equal(h.requests.filter((request) => request.operation === "collectVisits").length, 2);
   h.visits.set(url, []);
   h.resumeAgent();
   const restarted = await h.restart();
   await restarted.exchange();
-  assert.equal(h.requests.filter((request) => request.operation === "publish").length, 1);
+  assert.equal(h.requests.filter((request) => request.operation === "collectVisits").length, 2);
 });

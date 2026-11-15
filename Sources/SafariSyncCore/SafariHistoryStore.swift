@@ -112,6 +112,36 @@ public final class SafariHistoryStore: @unchecked Sendable {
         }
     }
 
+    /// Check the source anchor and requested visits in a single native read snapshot.
+    func currentVisits(_ visits: [(id: Int64, url: URL, milliseconds: Double)],
+                       cursor: SafariArrivalCursor, authenticationKey: Data) throws -> Set<Int64> {
+        try lock.withLock {
+            guard try databaseIdentity() == cursor.databaseIdentity else { throw SafariHistoryError.historyIdentityChanged }
+            let db = try Connection(path: databaseURL.path, readOnly: true)
+            defer { db.close() }
+            try db.exec("BEGIN")
+            defer { try? db.exec("ROLLBACK") }
+            try validateSchema(db)
+            try validateAnchor(cursor, db: db, key: authenticationKey)
+            let query = try db.prepare("SELECT i.url,v.visit_time FROM history_visits v JOIN history_items i ON i.id=v.history_item WHERE v.id=?")
+            defer { sqlite3_finalize(query) }
+            var current = Set<Int64>()
+            for visit in visits {
+                sqlite3_reset(query)
+                sqlite3_bind_int64(query, 1, visit.id)
+                switch sqlite3_step(query) {
+                case SQLITE_ROW:
+                    let milliseconds = (sqlite3_column_double(query, 1) + 978_307_200) * 1000
+                    if columnText(query, index: 0) == visit.url.absoluteString && abs(milliseconds - visit.milliseconds) < 0.001 { current.insert(visit.id) }
+                case SQLITE_DONE: break
+                default: throw db.error()
+                }
+            }
+            guard try databaseIdentity() == cursor.databaseIdentity else { throw SafariHistoryError.historyIdentityChanged }
+            return current
+        }
+    }
+
     /// Diagnostic only: never advances the cursor or returns URLs, titles or keys.
     public func inspectCursor(_ cursor: SafariArrivalCursor, authenticationKey: Data) throws -> SafariCursorInspection {
         try lock.withLock {

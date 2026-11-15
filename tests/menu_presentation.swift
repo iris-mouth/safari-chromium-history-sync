@@ -33,13 +33,8 @@ import ServiceManagement
         let delegate = MenuDelegate()
         let menu = delegate.makeMenu()
         let topActions = menu.items.compactMap { $0.action.map(NSStringFromSelector) }
-        precondition(!topActions.contains("showCloudDiagnostics"))
-        precondition(topActions.contains("showSyncStatus"))
-        precondition(topActions.contains("configureSafariAssist"))
-        precondition(topActions.contains("configureCollection"))
-        precondition(topActions.contains("configureViewer"))
-        precondition(topActions.contains("toggleSync"))
-        precondition(menu.items.contains { $0.title == "Quit History Sync" })
+        precondition(topActions == ["openWeb", "showSyncStatus", "collectNow", "showSettings", "terminate:"])
+        precondition(menu.items.first { $0.keyEquivalent == "," }?.action == NSSelectorFromString("showSettings"))
         let fakeHome = FileManager.default.temporaryDirectory.appendingPathComponent("profile-test-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: fakeHome) }
         let chrome = fakeHome.appendingPathComponent("Library/Application Support/Google/Chrome")
@@ -78,12 +73,13 @@ import ServiceManagement
         var statusRequests: [String] = []
         let status = SyncStatusWindow { command in
             statusRequests.append(command.operation)
+            if command.operation == "collectionStatus" { return Data(#"{"enabled":true,"sources":[],"statuses":[]}"#.utf8) }
             precondition(["status", "cloudStatus"].contains(command.operation))
             return try command.operation == "status" ? JSONEncoder().encode(health) : JSONEncoder().encode(diagnostics)
         }
         status.refresh()
         for _ in 0..<20 { try await Task.sleep(for: .milliseconds(10)) }
-        precondition(statusRequests == ["status", "cloudStatus"])
+        precondition(statusRequests == ["collectionStatus", "status", "cloudStatus"])
         let blocked = HealthSnapshot(enabled: true, activeProfileID: "edge:preview", runtimeState: "blocked",
             issueCode: AgentIssueCode.historyIdentityChanged, pendingBrowserToSafari: 0,
             pendingSafariToBrowser: 2, recoveryCount: 1, unrecoverableCount: 0)

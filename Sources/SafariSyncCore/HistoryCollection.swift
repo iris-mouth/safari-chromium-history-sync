@@ -57,7 +57,7 @@ public final class HistoryCollector: @unchecked Sendable {
               info.st_uid == getuid(), chmod(databaseURL.path, 0o600) == 0 else { throw HistoryCollectionError.unsafeDirectory }
         db = try HistoryWriteDB(path: databaseURL.path)
         let version = try db.scalarInt("PRAGMA user_version")
-        guard (0...4).contains(version) else { throw HistoryCollectionError.incompatibleDatabase }
+        guard (0...5).contains(version) else { throw HistoryCollectionError.incompatibleDatabase }
         if version == 0 {
             // Refuse to initialize an unrelated or partially-created database.
             guard try db.scalarInt("SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'") == 0 else {
@@ -131,6 +131,36 @@ public final class HistoryCollector: @unchecked Sendable {
                     """)
             }
         }
+        if version < 5 {
+            try db.transaction {
+                try db.exec("""
+                    CREATE TABLE IF NOT EXISTS pair(id INTEGER PRIMARY KEY CHECK(id=1), source TEXT NOT NULL,
+                      revision TEXT NOT NULL, extension_id TEXT, since REAL);
+                    CREATE TABLE IF NOT EXISTS routing_baselines(source TEXT PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE, native_id INTEGER NOT NULL);
+                    CREATE TABLE IF NOT EXISTS delivery_candidates(seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                      event TEXT NOT NULL UNIQUE, revision TEXT NOT NULL, destination TEXT NOT NULL, visit INTEGER NOT NULL UNIQUE REFERENCES visits(id) ON DELETE CASCADE);
+                    CREATE TABLE IF NOT EXISTS api_visits(visit INTEGER PRIMARY KEY REFERENCES visits(id) ON DELETE CASCADE, observed REAL NOT NULL);
+                    CREATE TABLE IF NOT EXISTS removal_cutoffs(source TEXT REFERENCES sources(id) ON DELETE CASCADE,url TEXT,cutoff REAL NOT NULL,PRIMARY KEY(source,url));
+                    CREATE TRIGGER IF NOT EXISTS collect_delivery AFTER INSERT ON visits
+                    WHEN EXISTS(SELECT 1 FROM pair WHERE since IS NOT NULL AND NEW.visit_seconds+NEW.visit_fraction>=since)
+                      AND EXISTS(SELECT 1 FROM routing_baselines WHERE source=NEW.source_id AND NEW.native_id>native_id)
+                      AND EXISTS(SELECT 1 FROM sources WHERE id=NEW.source_id AND last_success IS NOT NULL AND generation=NEW.generation)
+                    BEGIN
+                      INSERT INTO delivery_candidates(event,visit,revision,destination)
+                      SELECT lower(hex(randomblob(16))),NEW.id,revision,CASE WHEN NEW.source_id=source THEN 'safari' ELSE 'chromium' END FROM pair;
+                    END;
+                    PRAGMA user_version=5;
+                    """)
+                let sources = try Self.readSources(db)
+                if sources.count == 2, sources.contains(where: { $0.id == "safari:default" }),
+                   let partner = sources.first(where: { $0.browser == .chromium }) {
+                    try db.prepare("INSERT OR IGNORE INTO pair(id,source,revision) VALUES(1,?,?)")
+                        .run([.text(partner.id), .text(UUID().uuidString)])
+                } else {
+                    try db.exec("UPDATE collection_settings SET value='0' WHERE key='enabled'")
+                }
+            }
+        }
     }
 
     public func setEnabled(_ enabled: Bool) throws {
@@ -178,12 +208,27 @@ public final class HistoryCollector: @unchecked Sendable {
 
     /// This is the sole operation that removes deselected sources. A temporarily
     /// missing browser/profile is not a selection change.
-    public func configure(_ sources: [HistoryCollectionSource]) throws {
+    public func configure(_ sources: [HistoryCollectionSource], pairEnabled: Bool? = nil, expectedRemoved: Int64? = nil, expectedPending: Int64? = nil, queued: Set<String> = []) throws {
         cancelCurrent()
         try lock.withLock {
             guard Set(sources.map(\.id)).count == sources.count,
                   sources.allSatisfy({ !$0.id.isEmpty && !$0.path.isEmpty && !$0.browserType.isEmpty }) else { throw HistoryCollectionError.invalidSource }
             try db.transaction {
+                if let pairEnabled {
+                    guard sources.count == 2, sources.contains(where: { $0.id == "safari:default" }),
+                          let partner = sources.first(where: { $0.browser == .chromium }) else { throw HistoryCollectionError.invalidSource }
+                    let old = try readPair(db)
+                    if old?.source != partner.id {
+                        let count = try db.prepare("SELECT count(*) FROM visits WHERE source_id NOT IN ('safari:default',?)")
+                        try count.bind([.text(partner.id)])
+                        guard try count.step(), count.int64(0) == (expectedRemoved ?? 0),
+                              try Self.pendingCount(db, queued: queued) == (expectedPending ?? 0) else { throw TypedError(code: "PAIR_CHANGED") }
+                        try db.exec("DELETE FROM delivery_candidates; DELETE FROM pair")
+                        try db.prepare("INSERT INTO pair(id,source,revision) VALUES(1,?,?)").run([.text(partner.id), .text(UUID().uuidString)])
+                    }
+                    if !pairEnabled { try db.exec("UPDATE pair SET since=NULL") }
+                    try db.prepare("UPDATE collection_settings SET value=? WHERE key='enabled'").run([.text(pairEnabled ? "1" : "0")])
+                }
                 try db.exec("CREATE TEMP TABLE IF NOT EXISTS selected_source_ids(id TEXT PRIMARY KEY); DELETE FROM selected_source_ids")
                 let keep = try db.prepare("INSERT INTO selected_source_ids VALUES (?)")
                 let insert = try db.prepare("""
@@ -227,9 +272,10 @@ public final class HistoryCollector: @unchecked Sendable {
 
     /// Runs a full scan for every selected source. Failures are recorded and do
     /// not stop the other sources. Call again to retry.
-    public func collectAll() throws {
+    public func collectAll(onlyIfEnabled: Bool = false) throws {
         let version = cancellationLock.withLock { cancellationVersion }
         try lock.withLock {
+            if onlyIfEnabled, try db.scalarInt("SELECT value='1' FROM collection_settings WHERE key='enabled'") == 0 { return }
             for source in try Self.readSources(db) {
                 if cancelled(version) { return }
                 do {
@@ -274,6 +320,7 @@ public final class HistoryCollector: @unchecked Sendable {
         guard try state.step() else { throw HistoryCollectionError.invalidSource }
         let previousIdentity = state.text(0)
         var generation = state.text(1) ?? UUID().uuidString
+        let scanStarted = Date().timeIntervalSince1970
         let firstImport = state.optionalDouble(2) == nil
         var scannedIdentity = ""
         var publishPartial = false
@@ -316,21 +363,37 @@ public final class HistoryCollector: @unchecked Sendable {
             if !firstImport {
                 let mismatch = try db.prepare("""
                     SELECT EXISTS(SELECT 1 FROM scan_visits n JOIN visits v ON v.source_id=n.source_id AND v.native_id=n.native_id
-                      WHERE n.source_id=? AND (n.url<>v.url OR n.native_real IS NOT v.native_real OR n.native_int IS NOT v.native_int))
+                      WHERE n.source_id=? AND (n.url<>v.url OR n.native_real IS NOT v.native_real OR (n.native_int IS NOT v.native_int AND NOT EXISTS(SELECT 1 FROM api_visits a WHERE a.visit=v.id AND abs(n.native_int-v.native_int)<=1000))))
                     """)
                 try mismatch.bind([.text(source.id)])
                 guard try mismatch.step() else { throw HistoryCollectionError.incompatibleDatabase }
-                let disjoint = try db.prepare("SELECT EXISTS(SELECT 1 FROM visits WHERE source_id=?) AND NOT EXISTS(SELECT 1 FROM visits v JOIN scan_visits n ON v.source_id=n.source_id AND v.native_id=n.native_id WHERE v.source_id=?)")
+                let disjoint = try db.prepare("SELECT EXISTS(SELECT 1 FROM visits WHERE source_id=? AND NOT EXISTS(SELECT 1 FROM api_visits a WHERE a.visit=visits.id)) AND NOT EXISTS(SELECT 1 FROM visits v JOIN scan_visits n ON v.source_id=n.source_id AND v.native_id=n.native_id WHERE v.source_id=?)")
                 try disjoint.bind([.text(source.id), .text(source.id)])
                 guard try disjoint.step() else { throw HistoryCollectionError.incompatibleDatabase }
                 if previousIdentity != scannedIdentity || mismatch.int64(0) != 0 || disjoint.int64(0) != 0 {
                     generation = UUID().uuidString
+                    try db.prepare("DELETE FROM removal_cutoffs WHERE source=?").run([.text(source.id)])
+                    try db.exec("UPDATE pair SET since=NULL,revision=lower(hex(randomblob(16))); DELETE FROM delivery_candidates")
                     try db.prepare("DELETE FROM visits WHERE source_id=?").run([.text(source.id)])
                 }
             }
+            if source.browser == .chromium, try db.scalarInt("SELECT EXISTS(SELECT 1 FROM removal_cutoffs)") != 0 {
+                // Browser removal notifications can precede the native DB commit.
+                // Retire a cutoff only after a complete snapshot confirms absence.
+                try db.prepare("""
+                    DELETE FROM removal_cutoffs WHERE source=? AND NOT EXISTS(
+                      SELECT 1 FROM scan_visits n WHERE n.source_id=source AND (removal_cutoffs.url='' OR removal_cutoffs.url=n.url)
+                      AND n.visit_seconds+n.visit_fraction<=cutoff)
+                    """).run([.text(source.id)])
+                try db.prepare("""
+                    DELETE FROM scan_visits WHERE source_id=? AND EXISTS(SELECT 1 FROM removal_cutoffs r
+                      WHERE r.source=source_id AND (r.url='' OR r.url=scan_visits.url) AND visit_seconds+visit_fraction<=r.cutoff)
+                    """).run([.text(source.id)])
+            }
             try mergeStaged(sourceID: source.id, generation: generation)
-            try db.prepare("DELETE FROM visits WHERE source_id=? AND native_id NOT IN (SELECT native_id FROM scan_visits WHERE source_id=?)")
-                .run([.text(source.id), .text(source.id)])
+            try db.prepare("DELETE FROM visits WHERE source_id=? AND native_id NOT IN (SELECT native_id FROM scan_visits WHERE source_id=?) AND NOT EXISTS(SELECT 1 FROM api_visits a WHERE a.visit=visits.id AND a.observed>=?)")
+                .run([.text(source.id), .text(source.id), .real(scanStarted - 60)])
+            try db.prepare("DELETE FROM api_visits WHERE visit IN (SELECT v.id FROM visits v JOIN scan_visits n ON n.source_id=v.source_id AND n.native_id=v.native_id WHERE v.source_id=?)").run([.text(source.id)])
             try db.prepare("DELETE FROM scan_visits WHERE source_id=?").run([.text(source.id)])
             try db.prepare("UPDATE sources SET state='complete',db_identity=?,generation=?,last_success=?,error=NULL WHERE id=?")
                 .run([.text(scannedIdentity), .text(generation), .real(Date().timeIntervalSince1970), .text(source.id)])
@@ -376,6 +439,175 @@ public final class HistoryCollector: @unchecked Sendable {
         if b.starts(with: [0,0,1,0]) { return "image/x-icon" }
         if b.count >= 12 && Array(b[0..<4]) == Array("RIFF".utf8) && Array(b[8..<12]) == Array("WEBP".utf8) { return "image/webp" }
         return nil
+    }
+
+    public struct Pair: Codable, Sendable {
+        public let source: String
+        public let revision: String
+        public let extensionID: String?
+        public let since: Double?
+    }
+    private func readPair(_ connection: HistoryWriteDB) throws -> Pair? {
+        let row = try connection.prepare("SELECT source,revision,extension_id,since FROM pair WHERE id=1")
+        guard try row.step() else { return nil }
+        return Pair(source: row.text(0)!, revision: row.text(1)!, extensionID: row.text(2), since: row.optionalDouble(3))
+    }
+    public func pair() throws -> Pair? { try readPair(HistoryWriteDB(path: databasePath, readOnly: true)) }
+    public func bind(profile: String, revision: String) throws {
+        try lock.withLock {
+            guard let pair = try readPair(db), pair.revision == revision,
+                  !profile.isEmpty, profile.utf8.count <= 128 else { throw TypedError(code: "PAIR_CHANGED") }
+            try db.transaction {
+                if let previous = pair.extensionID, previous != profile {
+                    try db.exec("DELETE FROM delivery_candidates")
+                    try db.prepare("UPDATE pair SET since=NULL,revision=?").run([.text(UUID().uuidString)])
+                }
+                try db.prepare("UPDATE pair SET extension_id=? WHERE id=1").run([.text(profile)])
+            }
+        }
+    }
+    public func startRouting(_ enabled: Bool) throws {
+        try lock.withLock {
+            if enabled {
+                guard let pair = try readPair(db), pair.extensionID != nil,
+                      try isEnabled(), try db.scalarInt("SELECT COUNT(*) FROM sources WHERE last_success IS NOT NULL")==2 else {
+                    throw TypedError(code: "PAIR_NOT_READY")
+                }
+                if pair.since != nil { return }
+                try db.transaction {
+                    let since = Date().timeIntervalSince1970
+                    let baseline = try db.prepare("INSERT OR REPLACE INTO routing_baselines VALUES(?,?)")
+                    for source in try Self.readSources(db) {
+                        let identity = try HistorySourceReader.identity(source.path)
+                        let known = try db.prepare("SELECT 1 FROM sources WHERE id=? AND db_identity=? AND state='complete'")
+                        try known.bind([.text(source.id), .text(identity)])
+                        guard try known.step() else { throw TypedError(code: "SOURCE_NOT_READY") }
+                        let sourceDB = try HistoryWriteDB(path: source.path, readOnly: true)
+                        let table = source.browser == .safari ? "history_visits" : "visits"
+                        let maximum = try sourceDB.scalarInt("SELECT COALESCE(MAX(id),0) FROM " + table)
+                        guard try HistorySourceReader.identity(source.path) == identity else { throw TypedError(code: "SOURCE_NOT_READY") }
+                        try baseline.run([.text(source.id), .integer(maximum)])
+                    }
+                    try db.prepare("UPDATE pair SET since=?").run([.real(since)])
+                }
+            } else { try db.exec("UPDATE pair SET since=NULL") }
+        }
+    }
+    public struct Candidate: Codable {
+        let seq: Int64
+        let event: String
+        let visitRow: Int64
+        let visitTime: Double
+        let nativeID: Int64
+        public let browser: String
+        let url: URL
+        let title: String?
+    }
+    public func candidates() throws -> [Candidate] {
+        let reader = try HistoryWriteDB(path: databasePath, readOnly: true)
+        let rows = try reader.prepare("""
+            SELECT c.seq,c.event,v.native_id,s.browser,v.url,v.title,v.id,(v.visit_seconds+v.visit_fraction)*1000 FROM delivery_candidates c
+            JOIN visits v ON v.id=c.visit JOIN sources s ON s.id=v.source_id ORDER BY c.seq LIMIT 128
+            """)
+        var result: [Candidate] = []
+        while try rows.step() {
+            guard let url = URL(string: rows.text(4)!) else { throw HistoryCollectionError.invalidSource }
+            result.append(Candidate(seq: rows.int64(0), event: rows.text(1)!, visitRow: rows.int64(6), visitTime: rows.optionalDouble(7)!, nativeID: rows.int64(2), browser: rows.text(3)!, url: url, title: rows.text(5)))
+        }
+        return result
+    }
+    public struct BrowserCandidate: Encodable {
+        let event: String
+        let nativeID: String
+        let visitTime: Double
+        let url: URL
+    }
+
+    public func browserCandidates() throws -> [BrowserCandidate] {
+        var bytes = 512
+        var result: [BrowserCandidate] = []
+        for visit in try candidates() where visit.browser == "chromium" {
+            let item = BrowserCandidate(event: visit.event, nativeID: String(visit.nativeID), visitTime: visit.visitTime, url: visit.url)
+            bytes += try JSONEncoder().encode(item).count + 1
+            if bytes > 512 * 1024 { break }
+            result.append(item)
+        }
+        return result
+    }
+
+    func containsVisit(_ id: Int64) throws -> Bool {
+        let reader = try HistoryWriteDB(path: databasePath, readOnly: true)
+        let row = try reader.prepare("SELECT 1 FROM visits WHERE id=?")
+        try row.bind([.integer(id)])
+        return try row.step()
+    }
+    public func removeReported(profile: String, revision: String, urls: [String]?, before: Double) throws {
+        try lock.withLock {
+            guard let pair = try readPair(db), pair.extensionID == profile, pair.revision == revision,
+                  before.isFinite, before <= Date().timeIntervalSince1970 * 1000 + 60000,
+                  (urls?.count ?? 0) <= 128 else { throw TypedError(code: "PAIR_CHANGED") }
+            let predicate = "source_id=? AND visit_seconds+visit_fraction<=?"
+            try db.transaction {
+                let cutoff = try db.prepare("INSERT INTO removal_cutoffs VALUES(?,?,?) ON CONFLICT(source,url) DO UPDATE SET cutoff=MAX(cutoff,excluded.cutoff)")
+                for key in urls ?? [""] { try cutoff.run([.text(pair.source),.text(key),.real(before/1000)]) }
+                let args: [HistorySQLValue] = [.text(pair.source),.real(before/1000)]
+                if let urls {
+                    let delete = try db.prepare("DELETE FROM visits WHERE " + predicate + " AND url=?")
+                    for url in urls { try delete.run(args + [.text(url)]) }
+                } else { try db.prepare("DELETE FROM visits WHERE " + predicate).run(args) }
+            }
+        }
+    }
+
+    func finishCandidate(_ event: String) throws {
+        try lock.withLock { try db.prepare("DELETE FROM delivery_candidates WHERE event=?").run([.text(event)]) }
+    }
+    private static func pendingCount(_ reader: HistoryWriteDB, queued: Set<String>) throws -> Int64 {
+        var total = try reader.scalarInt("SELECT COUNT(*) FROM delivery_candidates")
+        let existing = try reader.prepare("SELECT 1 FROM delivery_candidates WHERE event=?")
+        for id in queued {
+            try existing.bind([.text(id)])
+            if try !existing.step() { total += 1 }
+        }
+        return total
+    }
+    public func candidateCount(queued: Set<String> = []) throws -> Int64 {
+        try Self.pendingCount(HistoryWriteDB(path: databasePath, readOnly: true), queued: queued)
+    }
+    public func collectReported(_ visits: [ReportedVisit], profile: String, revision: String) throws {
+        try lock.withLock {
+            guard try isEnabled(), let pair = try readPair(db), pair.extensionID == profile, pair.revision == revision,
+                  let source = try Self.readSources(db).first(where: { $0.id == pair.source }) else { throw TypedError(code: "PAIR_CHANGED") }
+            let row = try db.prepare("SELECT generation,db_identity FROM sources WHERE id=? AND last_success IS NOT NULL")
+            try row.bind([.text(source.id)])
+            guard try row.step(), let generation = row.text(0), try HistorySourceReader.identity(source.path) == row.text(1) else { throw TypedError(code: "SOURCE_NOT_READY") }
+            let origins = viewerOrigins + (try storedViewerOrigins()).compactMap(URL.init(string:))
+            try db.transaction {
+                for visit in visits {
+                    guard let id = Int64(visit.visitId), id > 0, let url = URL(string: visit.url),
+                          ["https","http"].contains(url.scheme?.lowercased() ?? ""), url.host != nil,
+                          visit.visitTime.isFinite, (0...32_503_680_000_000).contains(visit.visitTime) else { throw TypedError(code: "INVALID_VISIT") }
+                    if HistorySourceReader.isProductURL(url, viewerOrigins: origins) { continue }
+                    let deleted = try db.prepare("SELECT 1 FROM removal_cutoffs WHERE source=? AND url IN ('',?) AND cutoff>=?")
+                    try deleted.bind([.text(source.id), .text(visit.url), .real(visit.visitTime/1000)])
+                    if try deleted.step() { continue }
+                    let raw = Int64((visit.visitTime * 1000).rounded()) + 11_644_473_600_000_000
+                    let existing = try db.prepare("SELECT url,native_int FROM visits WHERE source_id=? AND native_id=?")
+                    try existing.bind([.text(source.id), .integer(id)])
+                    if try existing.step() {
+                        guard existing.text(0) == visit.url, abs(Double(existing.int64(1)) - Double(raw)) <= 1000 else { throw TypedError(code: "VISIT_CONFLICT") }
+                        continue
+                    }
+                    let t = try Self.time(.chromium(raw))
+                    try db.prepare("""
+                        INSERT INTO visits(source_id,generation,native_id,url,title,native_int,visit_seconds,visit_fraction,norm_title,norm_url)
+                        VALUES(?,?,?,?,?,?,?,?,?,?)
+                        """).run([.text(source.id),.text(generation),.integer(id),.text(visit.url),visit.title.map(HistorySQLValue.text) ?? .null,
+                                 .integer(raw),.integer(t.seconds),.real(t.fraction),.text(HistorySearch.normalize(visit.title ?? "")),.text(HistorySearch.normalize(visit.url))])
+                    try db.prepare("INSERT INTO api_visits VALUES(last_insert_rowid(),?)").run([.real(Date().timeIntervalSince1970)])
+                }
+            }
+        }
     }
 
     private static let mergeSQL = """

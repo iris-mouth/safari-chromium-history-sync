@@ -10,11 +10,15 @@ final class SyncStatusWindow: NSWindowController {
     private let pending = NSTextField(wrappingLabelWithString: "")
     private let safari = NSTextField(wrappingLabelWithString: "")
     private let assist = NSTextField(wrappingLabelWithString: "")
+    private let collection = NSTextField(wrappingLabelWithString: "")
+    private let viewer = NSTextField(wrappingLabelWithString: "")
+    private let viewerStatus: () -> String
     private var busy = false
 
-    init(request: @escaping (MenuCommand) async throws -> Data) {
+    init(viewerStatus: @escaping () -> String = { "Off" }, request: @escaping (MenuCommand) async throws -> Data) {
         self.request = request
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 420),
+        self.viewerStatus = viewerStatus
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 580, height: 540),
             styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
         window.title = NSLocalizedString("History Sync Status", comment: "")
         window.isReleasedWhenClosed = false
@@ -35,7 +39,7 @@ final class SyncStatusWindow: NSWindowController {
         let explanation = NSTextField(wrappingLabelWithString:
             NSLocalizedString("Check the browser history on your iPhone or iPad to confirm arrival. Safari's sync progress alone does not confirm that an individual visit reached another device.", comment: ""))
         explanation.textColor = .secondaryLabelColor
-        for field in [status, browser, pending, safari, assist, explanation] {
+        for field in [collection, viewer, status, browser, pending, safari, assist, explanation] {
             stack.addArrangedSubview(field)
             field.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         }
@@ -52,18 +56,32 @@ final class SyncStatusWindow: NSWindowController {
         busy = true
         Task {
             defer { busy = false }
+            viewer.stringValue = String(format: NSLocalizedString("Web Viewer · %@", comment: ""), NSLocalizedString(viewerStatus(), comment: ""))
+            do {
+                let data = try await request(MenuCommand(operation: "collectionStatus"))
+                let reply = try JSONDecoder().decode(CollectionReply.self, from: data)
+                var lines = [NSLocalizedString(reply.enabled ? "History collection is on" : "History collection is off", comment: "")]
+                for source in reply.statuses {
+                    let last = source.lastSuccess.map { Date(timeIntervalSince1970: $0).formatted(date: .abbreviated, time: .shortened) } ?? NSLocalizedString("never", comment: "")
+                    let state = NSLocalizedString("collection." + source.state, value: source.state, comment: "")
+                    lines.append(String(format: NSLocalizedString("%@ · %@ — %@ (last collected: %@)", comment: ""), source.browserType, source.profileName, state, last))
+                }
+                collection.stringValue = lines.joined(separator: "\n")
+            } catch {
+                collection.stringValue = NSLocalizedString("Collection status unavailable", comment: "")
+            }
             do {
                 let data = try await request(MenuCommand(operation: "status"))
                 let health = try JSONDecoder().decode(HealthSnapshot.self, from: data)
                 var diagnostics: CloudDiagnostics?
-                if health.runtimeState == "ready", let profile = health.activeProfileID {
+                if health.enabled, health.runtimeState == "ready", let profile = health.activeProfileID {
                     let data = try await request(MenuCommand(operation: "cloudStatus", profileID: profile))
                     diagnostics = try JSONDecoder().decode(CloudDiagnostics.self, from: data)
                 }
                 display(health: health, diagnostics: diagnostics)
             } catch {
                 status.stringValue = NSLocalizedString("Could not load sync status", comment: "")
-                browser.stringValue = NSLocalizedString("Check the connection under Troubleshooting in the menu.", comment: "")
+                browser.stringValue = NSLocalizedString("Check the connection in Settings → General.", comment: "")
                 pending.stringValue = ""
                 safari.stringValue = ""
                 assist.stringValue = ""
@@ -87,7 +105,7 @@ final class SyncStatusWindow: NSWindowController {
         if let cloud = diagnostics?.summary {
             safari.stringValue = String(format: NSLocalizedString("Waiting for Safari sync: %@\nArrival confirmed on device: %@", comment: ""), String(describing: cloud.safariPending), String(describing: cloud.remoteSeen))
         } else {
-            safari.stringValue = health.runtimeState == "blocked" ? NSLocalizedString("Open Troubleshooting to view the cause and recovery options.", comment: "") : ""
+            safari.stringValue = health.runtimeState == "blocked" ? NSLocalizedString("Open Settings → General → Resolve Sync Issue to review recovery options.", comment: "") : ""
         }
         if let diagnostics, let scheduler = diagnostics.safariAssist {
             assist.stringValue = String(format: NSLocalizedString("Automatic Safari sync assist (dedicated tab): %@", comment: ""), String(describing: scheduler.enabled ? NSLocalizedString("Enabled", comment: "") : NSLocalizedString("Disabled", comment: "")))

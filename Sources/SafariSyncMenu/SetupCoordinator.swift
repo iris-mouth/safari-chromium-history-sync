@@ -115,7 +115,7 @@ struct SetupCoordinator {
         NativeMessagingTarget(id: browser.rawValue, directory: browser.nativeMessagingDirectory)
     }
 
-    private func extensionID(in directory: URL) throws -> String {
+    func extensionID(in directory: URL) throws -> String {
         let data = try Data(contentsOf: directory.appendingPathComponent("manifest.json"))
         let manifest = try JSONSerialization.jsonObject(with: data) as? [String: Any]
         guard let encodedKey = manifest?["key"] as? String,

@@ -182,6 +182,13 @@ public struct CloudDeliveryCoordinator: Codable, Equatable, Sendable {
         bindings[scope(delivery.provider, delivery.profileID)] == delivery.bindingEpoch
     }
 
+    mutating func cancelPair(_ profile: String) {
+        for index in deliveries.indices where deliveries[index].profileID == profile {
+            deliveries[index].suppressed = true
+        }
+        plans.removeAll { $0.profileID == profile }
+    }
+
     public mutating func rebind(provider: CloudProvider, profileID: String) {
         let key = scope(provider, profileID)
         let previous = bindings[key]

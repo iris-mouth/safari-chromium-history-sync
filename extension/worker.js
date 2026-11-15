@@ -1,6 +1,4 @@
-import { createChromeGenerationStore } from "./chrome_generation_store.js";
 import { PROTOCOL_VERSION, isReceipt, isWebUrl } from "./protocol.js";
-import { createSyncController } from "./sync_controller.js";
 import {
   hasPendingImport,
   hasVisitNewerThan,
@@ -17,10 +15,6 @@ const EXCHANGE_ALARM = "exchange-history";
 const RUNTIME_KEY = "browser_runtime_v1";
 const EVIDENCE_DELAYS = [1_000, 3_000, 8_000, 18_000, 30_000];
 const REMOVAL_BATCHES_PER_EXCHANGE = 8;
-const controller = createSyncController({
-  store: createChromeGenerationStore(chrome.storage.local),
-});
-
 let serial = Promise.resolve();
 function exclusively(work) {
   const result = serial.then(work);
@@ -69,19 +63,23 @@ async function resolveDirtyVisits() {
     const dirty = state.dirtyUrls[url];
     const title = dirty && typeof dirty === "object" ? dirty.title : undefined;
     const unseen = unseenVisitsAfterMarker(visits, marker);
-    for (const visit of unseen.reverse()) {
-      await controller.browserExchange({
-        version: PROTOCOL_VERSION,
-        operation: "publish",
-        profileId: state.profileId,
-        events: [{
-          eventId: crypto.randomUUID(),
-          sourceKey: `${url}\n${visit.visitId}`,
-          url,
-          ...(title ? { title } : {}),
-          visitId: String(visit.visitId),
-        }],
-      });
+    for (let offset = 0; offset < unseen.length;) {
+      const records = [];
+      let bytes = 512;
+      while (offset < unseen.length && records.length < 128) {
+        const visit = unseen[offset];
+        const record = { visitId: String(visit.visitId), visitTime: visit.visitTime, url, title };
+        const size = new TextEncoder().encode(JSON.stringify(record)).length + 1;
+        if (bytes + size > 512 * 1024) {
+          if (!records.length) throw new Error("Visit exceeds native transport size");
+          break;
+        }
+        records.push(record);
+        bytes += size;
+        offset++;
+      }
+      const result = await sendNative({version: PROTOCOL_VERSION, operation: "collectVisits", profileId: state.profileId, visits: records});
+      if (result?.state !== "collected") return;
     }
     if (visits[0]) state.visitMarkers[url] = String(visits[0].visitId);
     delete state.dirtyUrls[url];
@@ -90,77 +88,30 @@ async function resolveDirtyVisits() {
 }
 
 async function sendNative(message) {
+  const revision = (await runtimeState()).revision;
+  if (message.operation === "pull") {
+    const candidates = await chrome.runtime.sendNativeMessage(HOST, {version: PROTOCOL_VERSION, operation: "candidateVisits", profileId: message.profileId, revision});
+    if (!Array.isArray(candidates)) return candidates;
+    message.confirmed = [];
+    message.missing = [];
+    const byUrl = new Map();
+    for (const candidate of candidates) {
+      if (!byUrl.has(candidate.url)) byUrl.set(candidate.url, await chrome.history.getVisits({url: candidate.url}));
+      const found = byUrl.get(candidate.url).some(visit => String(visit.visitId) === String(candidate.nativeID) && Math.abs(visit.visitTime - candidate.visitTime) <= 1);
+      (found ? message.confirmed : message.missing).push(candidate.event);
+    }
+  }
   return chrome.runtime.sendNativeMessage(HOST, {
     ...message,
     browserFamily: browserFamily(),
     extensionVersion: chrome.runtime.getManifest().version,
-    heldCount: await controller.heldCount(message.profileId),
-    capabilities: ["cloud-delivery-v1"],
+    revision,
+    capabilities: ["cloud-delivery-v1", "collected-visits-v1"],
   });
 }
 
 function isCancelled(response) {
   return response?.type === "error" && response.code === "CLOUD_DELIVERY_CANCELLED";
-}
-
-async function pushBrowserPage(state) {
-  const page = await controller.browserExchange({
-    version: PROTOCOL_VERSION,
-    operation: "pull",
-    stream: "browserToSafari",
-    profileId: state.profileId,
-    afterSequence: 0,
-    limit: 128,
-  });
-  if (page.type !== "page" || page.events.length === 0) return;
-  const events = [];
-  const missing = [];
-  const held = [];
-  const checked = new Map();
-  let pageBytes = 1_024;
-  for (const event of page.events) {
-    // Queues survive a stopped Agent. Recheck the native visit before replay so
-    // a deleted visit is not written into Safari after the product restarts.
-    const prefix = `${event.url}\n`;
-    if (typeof event.sourceKey !== "string" || !event.sourceKey.startsWith(prefix)) {
-      // Legacy entries without a native visit identity cannot be safely verified.
-      held.push(event.eventId);
-      continue;
-    }
-    const visitId = event.sourceKey.slice(prefix.length);
-    if (!visitId) { held.push(event.eventId); continue; }
-    if (!checked.has(event.url)) checked.set(event.url, await chrome.history.getVisits({ url: event.url }));
-    if (!checked.get(event.url).some((visit) => String(visit.visitId) === visitId)) {
-      missing.push(event.eventId);
-      continue;
-    }
-    const size = new TextEncoder().encode(JSON.stringify(event)).length + 1;
-    if (pageBytes + size > 512 * 1024) {
-      if (!events.length) throw new Error("History event exceeds native transport limit");
-      break;
-    }
-    events.push(event);
-    pageBytes += size;
-  }
-  if (held.length) await controller.holdUnverifiable(state.profileId, held);
-  if (missing.length) await controller.discardMissingBrowserVisits(state.profileId, missing);
-  if (!events.length) return;
-  const response = await sendNative({
-    version: PROTOCOL_VERSION,
-    operation: "publish",
-    stream: "browserToSafari",
-    profileId: state.profileId,
-    events,
-  });
-  if (response?.type === "receipt" && Number.isSafeInteger(response.throughSequence)) {
-    await controller.browserExchange({
-      version: PROTOCOL_VERSION,
-      operation: "ack",
-      stream: "browserToSafari",
-      profileId: state.profileId,
-      throughSequence: response.throughSequence,
-    });
-  }
 }
 
 async function recentVisits(url) {
@@ -344,12 +295,21 @@ async function recordRemoval(details, removedAt) {
   await saveRuntime(state);
 }
 
-async function reportRemovals(state) {
-  if (!state.agentCloudTracking) return true;
+async function reportRemovals(state, sync = true) {
+
   // Bound each turn's IPC work, but never let another writer overtake any
   // remaining cancellation batch, including a failed or lost response.
   for (let sent = 0; sent < REMOVAL_BATCHES_PER_EXCHANGE && state.removalEvents?.length; sent++) {
     const removal = state.removalEvents[0];
+    const removed = await sendNative({version: PROTOCOL_VERSION, operation: "collectRemoval", profileId: state.profileId,
+      allHistoryRemoved: removal.all, removedURLs: removal.urls, removedAt: removal.removedAt});
+    if (removed?.state !== "removed") return false;
+    if (!state.agentCloudTracking) {
+      if (sync) return true;
+      state.removalEvents.shift();
+      await saveRuntime(state);
+      continue;
+    }
     const response = await sendNative({
       version: PROTOCOL_VERSION, operation: "cloudRemoval", profileId: state.profileId,
       allHistoryRemoved: removal.all, removedURLs: removal.urls, removedAt: removal.removedAt,
@@ -361,22 +321,65 @@ async function reportRemovals(state) {
   return !state.removalEvents?.length;
 }
 
-export async function exchange() {
-  const state = await runtimeState();
-  if (!await reportRemovals(state)) return;
-  await resolveDirtyVisits();
-  await verifyEvidence();
-  await pushBrowserPage(state);
-  // The evidence/removal helpers persist a fresh state; don't overwrite it with the old snapshot.
-  await pullSafariPage(await runtimeState());
+async function collectionPolicy(state) {
+  const policy = await sendNative({version: PROTOCOL_VERSION, operation: "collectionPolicy", profileId: state.profileId});
+  if (!policy?.revision) {
+    if (policy?.code === "PAIR_NOT_CONNECTED" && state.collect) {
+      state.collect = false;
+      await saveRuntime(state);
+    }
+    return null;
+  }
+  if (state.revision !== policy.revision) {
+    const fresh = { profileId: state.profileId, revision: policy.revision, collect: policy.collect, dirtyUrls: {}, visitMarkers: {}, pendingEvidence: {} };
+    await saveRuntime(fresh);
+  } else if (state.collect !== policy.collect) {
+    state.collect = policy.collect;
+    await saveRuntime(state);
+  }
+  return policy;
 }
 
-chrome.history.onVisited.addListener((item) => {
-  return exclusively(() => markDirty(item)).catch(console.error);
+export async function exchange() {
+  const policy = await collectionPolicy(await runtimeState());
+  if (!policy?.collect) return;
+  const state = await runtimeState();
+  if (!await reportRemovals(state, policy.sync)) return;
+  await resolveDirtyVisits();
+  if (policy.sync) {
+    await verifyEvidence();
+    await pullSafariPage(await runtimeState());
+  }
+}
+
+chrome.runtime.onMessage.addListener((message, sender, respond) => {
+  if (sender.id !== chrome.runtime.id || sender.url?.split("#")[0] !== chrome.runtime.getURL("extension/connect.html") || message.operation !== "connectPair") return;
+  exclusively(async () => {
+    const state = await runtimeState();
+    return sendNative({ version: PROTOCOL_VERSION, operation: "connectPair", profileId: state.profileId, token: message.token });
+  }).then(respond, () => respond({type:"error"}));
+  return true;
+});
+
+chrome.history.onVisited.addListener(item => {
+  return exclusively(async () => {
+    if (!isWebUrl(item?.url)) return;
+    const state = await runtimeState();
+    if (state.collect) await markDirty(item);
+    const policy = await collectionPolicy(await runtimeState());
+    if (policy?.collect) {
+      await markDirty(item);
+      await resolveDirtyVisits();
+    }
+  }).catch(console.error);
 });
 chrome.history.onVisitRemoved.addListener((details) => {
   const removedAt = Date.now();
-  return exclusively(() => recordRemoval(details, removedAt)).catch(console.error);
+  return exclusively(async () => {
+    const state = await runtimeState();
+    if (state.collect) await recordRemoval(details, removedAt);
+    else if ((await collectionPolicy(state))?.collect) await recordRemoval(details, removedAt);
+  }).catch(console.error);
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {

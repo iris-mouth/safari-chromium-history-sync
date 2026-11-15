@@ -14,6 +14,7 @@ private final class AgentRuntime: @unchecked Sendable {
     private var runtimeState = "initializing"
     private var issueCode: String?
     private var cloudTrigger: DispatchSourceTimer?
+    private var connectionChallenge: (token: String, revision: String, expires: Date)?
     private var collector: HistoryCollector?
     private var collectionTimer: DispatchSourceTimer?
     private let collectionQueue = DispatchQueue(label: "io.github.irismouth.history-sync.collection", qos: .utility)
@@ -66,8 +67,14 @@ private final class AgentRuntime: @unchecked Sendable {
             stateURL: runtimeDirectory.appendingPathComponent("state.sealed"),
             secret: stateSecret,
             agentBuild: agentBuild,
-            compatibility: compatibility
+            compatibility: compatibility, collector: collector
         )
+        do {
+            if let pair = try collector?.pair() { try readyService.reconcilePair(revision: pair.revision, onStartup: true) }
+        } catch { block(AgentIssueCode.stateUnreadable); return }
+        if (try? collector?.pair()?.since) == nil {
+            do { try readyService.setSyncEnabled(false) } catch { block(AgentIssueCode.stateUnreadable); return }
+        }
         // Keep the encrypted sync preference adjustable even if Safari access
         // is currently blocked; browser exchange still requires ready state.
         lock.withLock { service = readyService; self.history = history }
@@ -95,9 +102,14 @@ private final class AgentRuntime: @unchecked Sendable {
         timer.resume()
     }
 
+    private var outdatedExtensionFamily: String?
+
     private struct CollectionReply: Codable {
+        let extensionUpdateRequired: Bool
         let enabled: Bool
         let sources: [HistoryCollectionSource]
+        let pair: HistoryCollector.Pair?
+        let pendingCount: Int64
         let statuses: [HistoryCollectionStatus]
     }
 
@@ -107,7 +119,7 @@ private final class AgentRuntime: @unchecked Sendable {
             let timer = DispatchSource.makeTimerSource(queue: collectionQueue)
             timer.schedule(deadline: .now() + 1, repeating: 30, leeway: .seconds(1))
             timer.setEventHandler {
-                if (try? instance.isEnabled()) == true { try? instance.collectAll() }
+                try? instance.collectAll(onlyIfEnabled: true)
             }
             lock.withLock { collector = instance; collectionTimer = timer }
             timer.resume()
@@ -121,6 +133,42 @@ private final class AgentRuntime: @unchecked Sendable {
         switch command.operation {
         case "collectionStatus": break
         case "collectionCandidates":
+            return try JSONEncoder().encode(discover(collector))
+        case "savePair":
+            guard let partnerID = command.profileID, let expected = command.snapshotJSON,
+                  (try collector.pair()?.revision ?? "") == expected,
+                  ["enable", "disable"].contains(command.result ?? "") else { throw TypedError(code: "PAIR_CHANGED") }
+            let candidates = try discover(collector).candidates
+            guard let safari = candidates.first(where: { $0.id == "safari:default" }),
+                  let partner = candidates.first(where: { $0.id == partnerID && $0.browser == .chromium }),
+                  let service = lock.withLock({ self.service }) else { throw TypedError(code: "PAIR_NOT_READY") }
+            if try collector.pair()?.source != partnerID {
+                connectionChallenge = nil
+            } else if command.result == "disable" {
+                try collector.startRouting(false)
+                try service.setSyncEnabled(false)
+            }
+            try collector.configure([safari, partner], pairEnabled: command.result == "enable", expectedRemoved: command.expectedRemoved, expectedPending: command.expectedPending, queued: service.pendingPairEvents())
+            if expected != (try collector.pair()?.revision ?? ""), let pair = try collector.pair() { try service.reconcilePair(revision: pair.revision) }
+        case "connectPair":
+            guard let pair = try collector.pair() else { throw TypedError(code: "PAIR_NOT_READY") }
+            let token = UUID().uuidString
+            connectionChallenge = (token, pair.revision, Date().addingTimeInterval(120))
+            return try JSONEncoder().encode(["source": pair.source, "token":token])
+        case "setViewerOrigin":
+            try collector.setViewerOrigin(command.snapshotJSON)
+        case "collectNow":
+            guard try collector.isEnabled() else { throw TypedError(code: "COLLECTION_PAUSED") }
+            collectionQueue.async { try? collector.collectAll(onlyIfEnabled: true) }
+            return Data("{\"accepted\":true}".utf8)
+        default: throw TypedError(code: "INVALID_OPERATION")
+        }
+        let current = try collector.pair()
+        let outdated = outdatedExtensionFamily != nil && current?.extensionID == nil && current?.source.split(separator: ":").first.map(String.init) == outdatedExtensionFamily
+        return try JSONEncoder().encode(CollectionReply(extensionUpdateRequired: outdated, enabled: collector.isEnabled(), sources: collector.sources(), pair: collector.pair(), pendingCount: collector.candidateCount(queued: lock.withLock { self.service }?.pendingPairEvents() ?? []), statuses: collector.statuses()))
+    }
+
+    private func discover(_ collector: HistoryCollector) throws -> CollectionCandidates {
             var home = FileManager.default.homeDirectoryForCurrentUser
             #if DEBUG
             // Process tests use an isolated synthetic home, never real profiles.
@@ -131,22 +179,7 @@ private final class AgentRuntime: @unchecked Sendable {
                 home = runtimeDirectory
             }
             #endif
-            return try JSONEncoder().encode(CollectionProfiles.discover(home: home, selected: collector.sources()))
-        case "setCollectionSources":
-            guard let json = command.snapshotJSON, let data = json.data(using: .utf8) else { throw TypedError(code: "INVALID_MESSAGE") }
-            let sources = try JSONDecoder().decode([HistoryCollectionSource].self, from: data)
-            try collector.configure(sources)
-        case "setCollectionEnabled":
-            guard let result = command.result, ["enable", "disable"].contains(result) else { throw TypedError(code: "INVALID_MESSAGE") }
-            try collector.setEnabled(result == "enable")
-        case "setViewerOrigin":
-            try collector.setViewerOrigin(command.snapshotJSON)
-        case "collectNow":
-            collectionQueue.async { try? collector.collectAll() }
-            return Data("{\"accepted\":true}".utf8)
-        default: throw TypedError(code: "INVALID_OPERATION")
-        }
-        return try JSONEncoder().encode(CollectionReply(enabled: collector.isEnabled(), sources: collector.sources(), statuses: collector.statuses()))
+        return CollectionProfiles.discover(home: home, selected: try collector.sources())
     }
 
     func syncPreference() throws -> SyncPreferenceStatus {
@@ -161,7 +194,17 @@ private final class AgentRuntime: @unchecked Sendable {
 
     func setSyncEnabled(_ enabled: Bool) throws -> HealthSnapshot {
         guard let service = lock.withLock({ self.service }) else { throw TypedError(code: "AGENT_INITIALIZING", retryable: true) }
-        try service.setSyncEnabled(enabled)
+        guard let collector else { throw TypedError(code: "COLLECTION_UNAVAILABLE") }
+        if enabled {
+            guard let pair = try collector.pair(), let profile = pair.extensionID else { throw TypedError(code: "PAIR_NOT_CONNECTED") }
+            try service.reconcilePair(revision: pair.revision)
+            _ = try service.selectProfile(profile)
+            if let inspection = try service.inspectSafariCursor(), !inspection.identityMatches || inspection.anchorState != "matches" {
+                throw TypedError(code: "SAFARI_CURSOR_CHANGED")
+            }
+        }
+        try collector.startRouting(enabled)
+        do { try service.setSyncEnabled(enabled) } catch { try collector.startRouting(false); throw error }
         return try service.status()
     }
 
@@ -198,6 +241,40 @@ private final class AgentRuntime: @unchecked Sendable {
     }
 
     func browserExchange(_ body: Data) throws -> Data {
+        let message = try JSONDecoder().decode(BrowserMessage.self, from: body)
+        guard message.version == safariSyncProtocolVersion else { throw TypedError(code: "UNSUPPORTED_PROTOCOL") }
+        guard let collector else { throw TypedError(code: "COLLECTION_UNAVAILABLE") }
+        if ["pull", "publish"].contains(message.operation), message.capabilities?.contains("collected-visits-v1") != true {
+            outdatedExtensionFamily = message.browserFamily ?? message.profileID.split(separator: ":").first.map(String.init)
+            throw TypedError(code: "EXTENSION_UPDATE_REQUIRED")
+        }
+        if message.operation == "connectPair" {
+            guard let challenge = connectionChallenge, challenge.expires > Date(), challenge.token == message.token,
+                  let pair = try collector.pair(), pair.revision == challenge.revision,
+                  let family = pair.source.split(separator: ":").first,
+                  message.profileID.hasPrefix(String(family) + ":"), message.browserFamily == String(family) else { throw TypedError(code: "PAIR_CHANGED") }
+            try collector.bind(profile: message.profileID, revision: pair.revision)
+            if let bound = try collector.pair(), let service = lock.withLock({ self.service }) { try service.reconcilePair(revision: bound.revision) }
+            connectionChallenge = nil
+            return try JSONEncoder().encode(["state":"connected"])
+        }
+        guard let pair = try collector.pair(), pair.extensionID == message.profileID else { throw TypedError(code: "PAIR_NOT_CONNECTED") }
+        if message.operation == "collectionPolicy" {
+            return try JSONSerialization.data(withJSONObject: ["revision":pair.revision, "collect":try collector.isEnabled(), "sync":pair.since != nil])
+        }
+        if message.operation == "candidateVisits" {
+            guard pair.since != nil, pair.revision == message.revision else { throw TypedError(code: "PAIR_CHANGED") }
+            return try JSONEncoder().encode(collector.browserCandidates())
+        }
+        if message.operation == "collectRemoval", let revision = message.revision, let before = message.removedAt {
+            try collector.removeReported(profile: message.profileID, revision: revision, urls: message.allHistoryRemoved == true ? nil : message.removedURLs ?? [], before: before)
+            return try JSONEncoder().encode(["state":"removed"])
+        }
+        if message.operation == "collectVisits" {
+            guard let visits = message.visits, visits.count <= 128, let revision = message.revision else { throw TypedError(code: "INVALID_PAGE") }
+            try collector.collectReported(visits, profile: message.profileID, revision: revision)
+            return try JSONEncoder().encode(["state":"collected"])
+        }
         guard let service = lock.withLock({ runtimeState == "ready" ? service : nil }) else {
             let issue = lock.withLock { issueCode }
             return try JSONEncoder().encode(TypedError(
@@ -447,17 +524,12 @@ do {
                             response = try JSONEncoder().encode(runtime.health())
                         } else if command.operation == "inspectSafariCursor" {
                             response = try JSONEncoder().encode(runtime.inspectSafariCursor())
-                        } else if ["collectionStatus", "collectionCandidates", "setCollectionSources", "setCollectionEnabled", "collectNow", "setViewerOrigin"].contains(command.operation) {
+                        } else if ["collectionStatus", "collectionCandidates", "savePair", "connectPair", "collectNow", "setViewerOrigin"].contains(command.operation) {
                             response = try runtime.collectionCommand(command)
                         } else if command.operation == "syncPreference" {
                             response = try JSONEncoder().encode(runtime.syncPreference())
                         } else if command.operation == "setSyncEnabled", let value = command.result, ["enable", "disable"].contains(value) {
                             response = try JSONEncoder().encode(runtime.setSyncEnabled(value == "enable"))
-                        } else if command.operation == "selectProfile", let profileID = command.profileID {
-                            response = try JSONEncoder().encode(ProfileSwitchStatus(
-                                state: runtime.selectProfile(profileID),
-                                profileID: profileID
-                            ))
                         } else if [
                             "cloudStatus", "cloudProbe", "cloudObserve", "cloudPrepareReplay",
                             "cloudExecuteReplay", "cloudCompareExport", "cloudRebind", "cloudSafariAssist",

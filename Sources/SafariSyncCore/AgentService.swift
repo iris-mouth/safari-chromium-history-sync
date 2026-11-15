@@ -6,6 +6,9 @@ public final class AgentService: @unchecked Sendable {
         let sequence: Int64
         let url: URL
         let profileID: String
+        var visitRow: Int64?
+        var safariSourceID: Int64?
+        var sourceTime: Double?
     }
 
     private struct RecoveryEntry: Codable, Sendable {
@@ -14,12 +17,16 @@ public final class AgentService: @unchecked Sendable {
         let url: URL
         let outcome: String
         var attempt: Int
+        var visitRow: Int64?
+        var safariSourceID: Int64?
+        var sourceTime: Double?
         var nextRetryAt: Date
     }
 
     private struct State: Codable, Sendable {
         var schemaVersion = 3
         var enabled = true
+        var pairRevision: String?
         var activeProfileID: String?
         var cursor: SafariArrivalCursor?
         var nextSafariSequence: Int64 = 1
@@ -31,7 +38,7 @@ public final class AgentService: @unchecked Sendable {
         var browserACKSequences: [String: Int64] = [:]
 
         private enum CodingKeys: String, CodingKey {
-            case schemaVersion, enabled, activeProfileID, cursor, nextSafariSequence
+            case schemaVersion, enabled, pairRevision, activeProfileID, cursor, nextSafariSequence
             case outbox, deliveredSafariVisitIDs, recovery, unrecoverableCount, cloud, browserACKSequences
         }
 
@@ -49,6 +56,7 @@ public final class AgentService: @unchecked Sendable {
             }
             schemaVersion = 3
             enabled = try values.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+            pairRevision = try values.decodeIfPresent(String.self, forKey: .pairRevision)
             activeProfileID = try values.decodeIfPresent(String.self, forKey: .activeProfileID)
             cursor = try values.decodeIfPresent(SafariArrivalCursor.self, forKey: .cursor)
             nextSafariSequence = try values.decodeIfPresent(Int64.self, forKey: .nextSafariSequence) ?? 1
@@ -70,6 +78,7 @@ public final class AgentService: @unchecked Sendable {
         var cloudTracking: Bool
     }
 
+    private let collector: HistoryCollector?
     private let history: SafariHistoryStore
     private let persistence: EncryptedStateStore<State>
     private let authenticationKey: Data
@@ -78,7 +87,8 @@ public final class AgentService: @unchecked Sendable {
     private let lock = NSLock()
     private var observedProfiles: [String: ObservedProfile] = [:]
 
-    public init(history: SafariHistoryStore, stateURL: URL, secret: Data, agentBuild: String? = nil, compatibility: RuntimeCompatibility? = nil) {
+    public init(history: SafariHistoryStore, stateURL: URL, secret: Data, agentBuild: String? = nil, compatibility: RuntimeCompatibility? = nil, collector: HistoryCollector? = nil) {
+        self.collector = collector
         self.history = history
         self.persistence = EncryptedStateStore(url: stateURL, secret: secret)
         self.authenticationKey = secret
@@ -103,6 +113,16 @@ public final class AgentService: @unchecked Sendable {
             observe(message)
             var state = try persistence.load() ?? State()
 
+            if let collector {
+                guard let pair = try collector.pair(), pair.extensionID == message.profileID,
+                      message.revision == pair.revision, message.capabilities?.contains("collected-visits-v1") == true else {
+                    return try encode(.failure(TypedError(code: "PAIR_NOT_CONNECTED")))
+                }
+                if message.operation == "publish" { return try encode(.failure(TypedError(code: "USE_COLLECTION"))) }
+                if message.operation == "pull", try (pair.since == nil || !collector.isEnabled()) {
+                    return try encode(.failure(TypedError(code: "SYNC_PAUSED")))
+                }
+            }
             if !state.enabled && ["publish", "pull"].contains(message.operation) {
                 return try encode(.failure(TypedError(code: "SYNC_PAUSED", retryable: true)))
             }
@@ -166,18 +186,24 @@ public final class AgentService: @unchecked Sendable {
                         eventID: retry.eventID,
                         sequence: state.nextSafariSequence,
                         url: retry.url,
-                        profileID: retry.profileID
+                        profileID: retry.profileID, visitRow: retry.visitRow, safariSourceID: retry.safariSourceID, sourceTime: retry.sourceTime
                     ))
                     state.nextSafariSequence += 1
                     state.recovery[index].nextRetryAt = now.addingTimeInterval(
                         recoveryDelay(afterAttempt: retry.attempt)
                     )
                 }
-                try harvestSafariVisits(state: &state, profileID: message.profileID)
+                let verified: Set<String>?
+                if let collector {
+                    verified = try dispatchCollected(collector, state: &state, message: message)
+                } else {
+                    verified = nil
+                    try harvestSafariVisits(state: &state, profileID: message.profileID)
+                }
                 let after = message.afterSequence ?? 0
                 let limit = max(1, min(message.limit ?? safariSyncMaximumPageSize, safariSyncMaximumPageSize))
                 let pending = state.outbox
-                    .filter { $0.profileID == message.profileID && $0.sequence > after }
+                    .filter { $0.profileID == message.profileID && $0.sequence > after && (verified?.contains($0.eventID) ?? true) }
                     .prefix(limit)
                 var events: [SyncEvent] = []
                 var pageBytes = 512
@@ -298,7 +324,7 @@ public final class AgentService: @unchecked Sendable {
                         profileID: message.profileID,
                         url: failed.url,
                         outcome: outcome,
-                        attempt: 0,
+                        attempt: 0, visitRow: failed.visitRow, safariSourceID: failed.safariSourceID, sourceTime: failed.sourceTime,
                         nextRetryAt: Date().addingTimeInterval(5 * 60)
                     ))
                 }
@@ -326,6 +352,95 @@ public final class AgentService: @unchecked Sendable {
             state.enabled = enabled
             try persist(state)
         }
+    }
+
+    public func pendingPairEvents() throws -> Set<String> {
+        try lock.withLock {
+            let state = try persistence.load() ?? State()
+            let unapplied = state.cloud.deliveries.filter { $0.localAppliedAt == nil && !$0.suppressed }
+            return Set(state.outbox.map(\.eventID) + state.recovery.map(\.eventID) + unapplied.map(\.id))
+        }
+    }
+
+    public func reconcilePair(revision: String, onStartup: Bool = false) throws {
+        try lock.withLock {
+            var state = try persistence.load() ?? State()
+            guard state.pairRevision != revision else { return }
+            // The first launch of an upgrade must preserve the old stopped queue
+            // until the user explicitly confirms the new configuration.
+            if onStartup && state.pairRevision == nil { return }
+            for old in Set(state.cloud.deliveries.map(\.profileID)) { state.cloud.cancelPair(old) }
+            state.pairRevision = revision
+            state.enabled = false
+            state.activeProfileID = nil
+            state.outbox.removeAll()
+            state.recovery.removeAll()
+            try persist(state)
+        }
+    }
+
+    private func dispatchCollected(_ collector: HistoryCollector, state: inout State, message: BrowserMessage) throws -> Set<String> {
+        let profile = message.profileID
+        let confirmed = Set(message.confirmed ?? [])
+        let missing = Set(message.missing ?? [])
+        let cursor = try safariWriteCursor(state: &state)
+        let candidates = try collector.candidates()
+        let window = state.outbox.lazy.filter { $0.sequence > (message.afterSequence ?? 0) }.prefix(safariSyncMaximumPageSize)
+        let pending = window.compactMap { entry -> (Int64, URL, Double)? in
+            guard let id = entry.safariSourceID, let time = entry.sourceTime else { return nil }
+            return (id, entry.url, time)
+        }
+        let fresh = candidates.filter { $0.browser == "safari" }.map { ($0.nativeID, $0.url, $0.visitTime) }
+        let live = try history.currentVisits(pending + fresh, cursor: cursor, authenticationKey: authenticationKey)
+        let inspected = Set(window.map(\.eventID))
+
+        let outbox = try state.outbox.filter { entry in
+            guard inspected.contains(entry.eventID), let id = entry.visitRow else { return true }
+            if let source = entry.safariSourceID, !live.contains(source) { return false }
+            return try collector.containsVisit(id)
+        }
+        if outbox.count != state.outbox.count {
+            let retained = Set(outbox.map(\.eventID))
+            for entry in state.outbox where !retained.contains(entry.eventID) {
+                state.cloud.suppress(profileID: profile, urls: nil, id: entry.eventID)
+                state.recovery.removeAll { $0.eventID == entry.eventID }
+            }
+            state.outbox = outbox
+            try persist(state)
+        }
+        for visit in candidates {
+            if visit.browser == "safari", !live.contains(visit.nativeID) {
+                try collector.finishCandidate(visit.event)
+                continue
+            }
+            if visit.browser == "chromium" {
+                if missing.contains(visit.event) { try collector.finishCandidate(visit.event); continue }
+                guard confirmed.contains(visit.event) else { continue }
+            }
+            let destination: CloudProvider = visit.browser == "safari" ? .browser : .safari
+            let imported = state.cloud.deliveries.contains {
+                $0.profileID == profile && $0.provider != destination && $0.url == visit.url && $0.destinationVisitID == String(visit.nativeID)
+            }
+            if !imported && !state.cloud.isSafariAssistURL(visit.url) {
+                if destination == .browser {
+                    if !state.deliveredSafariVisitIDs.contains(visit.nativeID),
+                       !state.outbox.contains(where: { $0.eventID == visit.event }) {
+                        state.outbox.append(OutboxEvent(eventID: visit.event, sequence: state.nextSafariSequence, url: visit.url, profileID: profile, visitRow: visit.visitRow, safariSourceID: visit.nativeID, sourceTime: visit.visitTime))
+                        state.nextSafariSequence += 1
+                    }
+                } else {
+                    if state.cloud.deliveries.contains(where: { $0.profileID == profile && $0.provider == .browser && $0.url == visit.url && $0.localAppliedAt == nil && !$0.suppressed }) { continue }
+                    try state.cloud.reserve(id: visit.event, profileID: profile, provider: .safari, url: visit.url, now: .now, title: visit.title)
+                    try persist(state)
+                    let receipt = try history.insertBrowserVisit(eventID: visit.event, url: visit.url, title: visit.title, deliveredAt: .now, validating: cursor, authenticationKey: authenticationKey)
+                    state.deliveredSafariVisitIDs.insert(receipt.visitID)
+                    try state.cloud.recordLocalDelivery(id: visit.event, visitID: String(receipt.visitID), time: receipt.deliveredAt, now: .now, generation: receipt.generation, databaseIdentity: cursor.databaseIdentity)
+                }
+                try persist(state)
+            }
+            try collector.finishCandidate(visit.event)
+        }
+        return inspected.union(candidates.filter { $0.browser == "safari" && live.contains($0.nativeID) }.map(\.event))
     }
 
     /// Reads only aggregate cursor evidence. It never changes stored sync state.
@@ -387,7 +502,7 @@ public final class AgentService: @unchecked Sendable {
                 )
             }
             return HealthSnapshot(
-                enabled: state.enabled,
+                enabled: state.enabled && (collector == nil || (try? collector?.pair()?.since) != nil),
                 activeProfileID: state.activeProfileID,
                 runtimeState: "ready",
                 agentBuild: agentBuild,
@@ -524,7 +639,7 @@ public final class AgentService: @unchecked Sendable {
         // Reserve durably under the lock; slow application events must not block IPC.
         let work: (batch: [CloudDelivery], launch: Bool, assist: URL?)? = try lock.withLock {
             var state = try persistence.load() ?? State()
-            guard state.enabled, let profile = state.activeProfileID else { return nil }
+            guard state.enabled, (try collector == nil || collector?.pair()?.since != nil), let profile = state.activeProfileID else { return nil }
             let previous = state.cloud
             state.cloud.maintenance(now: now)
             try applyQueuedSafariDeliveries(state: &state, now: now)
@@ -557,7 +672,7 @@ public final class AgentService: @unchecked Sendable {
     public func cloudCommand(_ command: MenuCommand, now: Date = .now) throws -> CloudDiagnostics {
         try lock.withLock {
             var state = try persistence.load() ?? State()
-            guard state.enabled, let profile = state.activeProfileID,
+            guard state.enabled, (try collector == nil || collector?.pair()?.since != nil), let profile = state.activeProfileID,
                   command.profileID == profile else { throw TypedError(code: "PROFILE_NOT_ACTIVE") }
             var plan: CloudRepairPlan?
             switch command.operation {
@@ -633,7 +748,8 @@ public final class AgentService: @unchecked Sendable {
 
     private func applyQueuedSafariDeliveries(state: inout State, now: Date) throws {
         let queued = state.cloud.deliveries.filter { $0.profileID == state.activeProfileID
-            && $0.provider == .safari && $0.localAppliedAt == nil && !$0.suppressed && state.cloud.isCurrent($0) }
+            && $0.provider == .safari && $0.localAppliedAt == nil && !$0.suppressed && state.cloud.isCurrent($0)
+            && (collector == nil || $0.kind != "relay") }
         guard !queued.isEmpty else { return }
         let cursor = try safariWriteCursor(state: &state)
         let identity = try history.cloudSnapshot(deliveries: []).databaseIdentity

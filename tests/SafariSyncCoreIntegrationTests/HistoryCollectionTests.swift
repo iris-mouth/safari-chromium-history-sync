@@ -81,11 +81,51 @@ enum HistoryCollectionTests {
         try expect(HistorySearch.normalize("ｶﾀｶﾅ Straße"), "かたかな strasse", "NFKC casefold kana")
         try expect(Array(HistorySearch.normalize("ｶﾞｯｺｳ").unicodeScalars.map(\.value)), Array(HistorySearch.normalize("がっこう").unicodeScalars.map(\.value)), "voiced kana normalization must match at the scalar level")
         try expect(Array(HistorySearch.normalize("ǰ").unicodeScalars.map(\.value)), [0x6a, 0x30c], "casefold retains decomposed Unicode result")
+        try collectsLockedExtensionVisits(dir: dir)
         try firstImportCanBeReadBeforeCompletion(dir: dir)
         try localIcons(dir: dir)
         try collectionDoesNotChangeSyncCursor(dir: dir)
         try searchIndexPreservesLiteralSemantics(dir: dir)
         try viewerOriginChangesRemainExcluded(dir: dir)
+    }
+
+    static func collectsLockedExtensionVisits(dir: URL) throws {
+        let safari = try HistoryFixture()
+        let edge = try HistoryFixture()
+        let database = dir.appendingPathComponent("pair/visits.sqlite")
+        let collector = try HistoryCollector(databaseURL: database)
+        try edge.exec("CREATE TABLE urls(id INTEGER PRIMARY KEY,url TEXT,title TEXT); CREATE TABLE visits(id INTEGER PRIMARY KEY,url INTEGER,visit_time INTEGER)")
+        let url = "https://pair-fixture.example/revisit"
+        try edge.exec("INSERT INTO urls VALUES(1,'\(url)','Native title'); INSERT INTO visits VALUES(1,1,13300000000000001)")
+        try collector.configure([
+            HistoryCollectionSource(id:"safari:default", browser:.safari, browserType:"Safari", profileName:"Default", path:safari.url.path),
+            HistoryCollectionSource(id:"edge:Profile 1", browser:.chromium, browserType:"Edge", profileName:"Synthetic", path:edge.url.path)
+        ], pairEnabled:true)
+        try collector.collectAll()
+        guard let revision = try collector.pair()?.revision else { throw IntegrationFailure.assertion("missing pair") }
+        try collector.bind(profile:"edge:synthetic", revision:revision)
+        try collector.startRouting(true)
+        let ms = ceil(Date().timeIntervalSince1970 * 1000) + 1
+        let nativeTime = Int64(ms * 1000) + 11_644_473_600_000_000 + 437
+        try edge.exec("BEGIN EXCLUSIVE; INSERT INTO visits VALUES(2,1,\(nativeTime))")
+        let encoded = try JSONSerialization.data(withJSONObject:[["visitId":"2","visitTime":ms,"url":url]])
+        let reports = try JSONDecoder().decode([ReportedVisit].self, from:encoded)
+        try collector.collectReported(reports, profile:"edge:synthetic", revision:revision)
+        let record = try count(database,"SELECT id FROM visits WHERE native_id=2")
+        try expect(try collector.candidateCount(), 1, "locked Edge fast path creates one routable revisit")
+        try edge.exec("COMMIT")
+        try collector.collectAll()
+        try expect(try count(database,"SELECT id FROM visits WHERE native_id=2"), record, "DB scan preserves fast-path record")
+        try expect(try count(database,"SELECT native_int FROM visits WHERE native_id=2"),nativeTime,"disk reconciliation supplies exact Chromium microseconds")
+        try expect(try collector.candidateCount(),1,"duplicate observation does not create a second delivery")
+        try collector.removeReported(profile:"edge:synthetic",revision:revision,urls:[url],before:ms+1)
+        try collector.collectAll()
+        try expect(try count(database,"SELECT count(*) FROM visits"),0,"stale on-disk snapshot cannot resurrect notified removals")
+        try expect(try collector.candidateCount(),0,"removal cancels pending delivery")
+        try collector.bind(profile:"edge:reinstalled",revision:revision)
+        guard let rebound = try collector.pair() else { throw IntegrationFailure.assertion("pair disappeared after reinstall") }
+        try expect(rebound.since,nil,"reinstalled extension requires fresh opt-in")
+        try expect(rebound.revision != revision,true,"stale worker cannot reuse the previous revision")
     }
 
     static func viewerOriginChangesRemainExcluded(dir: URL) throws {

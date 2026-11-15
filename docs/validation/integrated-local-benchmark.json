@@ -1,6 +1,6 @@
 {
   "conditions": {
-    "date_local": "2026-11-14",
+    "date_local": "2026-11-15",
     "platform": "macOS-27.2.1-arm64-arm-64bit-Mach-O",
     "machine": "arm64",
     "python": "3.14.7",
@@ -12,28 +12,28 @@
   "results": [
     {
       "records": 100000,
-      "fixture_generation_seconds": 0.077,
-      "initial_collection_seconds": 4.213,
+      "fixture_generation_seconds": 0.076,
+      "initial_collection_seconds": 5.31,
       "queries": {
         "day": {
           "seconds": [
-            0.113,
-            0.1107,
-            0.1097,
-            0.1082
+            0.1773,
+            0.1474,
+            0.1201,
+            0.1141
           ],
-          "median_seconds": 0.1102,
+          "median_seconds": 0.1337,
           "items": 200,
           "response_bytes": 62340
         },
         "search": {
           "seconds": [
-            0.0552,
-            0.0549,
-            0.055,
-            0.0545
+            0.0574,
+            0.0571,
+            0.0613,
+            0.0569
           ],
-          "median_seconds": 0.055,
+          "median_seconds": 0.0573,
           "items": 100,
           "response_bytes": 31907
         }
@@ -41,28 +41,28 @@
     },
     {
       "records": 1000000,
-      "fixture_generation_seconds": 0.836,
-      "initial_collection_seconds": 46.724,
+      "fixture_generation_seconds": 0.731,
+      "initial_collection_seconds": 49.524,
       "queries": {
         "day": {
           "seconds": [
-            0.1128,
-            0.1098,
-            0.1121,
-            0.1137
+            0.1114,
+            0.1082,
+            0.1076,
+            0.107
           ],
-          "median_seconds": 0.1125,
+          "median_seconds": 0.1079,
           "items": 200,
           "response_bytes": 62885
         },
         "search": {
           "seconds": [
-            0.1183,
-            0.1193,
-            0.1174,
-            0.1144
+            0.1148,
+            0.1116,
+            0.1108,
+            0.1108
           ],
-          "median_seconds": 0.1179,
+          "median_seconds": 0.1112,
           "items": 200,
           "response_bytes": 64261
         }

@@ -132,7 +132,7 @@ public enum HistorySourceReader {
         if !visits.isEmpty { try onBatch(visits) }
     }
 
-    private static func isProductURL(_ url: URL, viewerOrigins: [URL]) -> Bool {
+    static func isProductURL(_ url: URL, viewerOrigins: [URL]) -> Bool {
         if SafariSyncAssist.isControlURL(url) { return true }
         if url.scheme?.lowercased() == "https", url.host?.lowercased() == "example.com",
            url.user == nil, url.password == nil, url.port == nil, url.query == nil, url.fragment == nil {
@@ -162,7 +162,7 @@ public enum HistorySourceReader {
                 Int64(info.st_mtimespec.tv_sec), Int64(info.st_mtimespec.tv_nsec),
                 Int64(info.st_ctimespec.tv_sec), Int64(info.st_ctimespec.tv_nsec)]
     }
-    private static func identity(_ path: String) throws -> String {
+    static func identity(_ path: String) throws -> String {
         var info = stat()
         guard stat(path, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG else { throw HistorySourceReadError.unavailable(path) }
         return "\(info.st_dev):\(info.st_ino)"

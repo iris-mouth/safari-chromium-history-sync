@@ -43,7 +43,7 @@ cp "$ROOT/LICENSE" "$AGENT_APP/Contents/Resources/LICENSE"
 cp "$ROOT/manifest.json" "$ROOT/service_worker.js" "$APP/Contents/Resources/ChromiumExtension/"
 cp -R "$ROOT/_locales" "$APP/Contents/Resources/ChromiumExtension/"
 mkdir -p "$APP/Contents/Resources/ChromiumExtension/extension"
-for source in protocol.js sync_controller.js chrome_generation_store.js worker.js visit_resolution.js; do
+for source in protocol.js sync_controller.js chrome_generation_store.js worker.js visit_resolution.js connect.js connect.html; do
   cp "$ROOT/extension/$source" "$APP/Contents/Resources/ChromiumExtension/extension/"
 done
 

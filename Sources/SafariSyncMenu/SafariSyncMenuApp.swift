@@ -8,10 +8,11 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let agentBundleIdentifier = ProductIdentity.agentBundleIdentifier
     private let setupCoordinator = SetupCoordinator()
     private var statusItem: NSStatusItem?
-    private var healthItem = NSMenuItem(title: NSLocalizedString("Checking Sync Status…", comment: ""), action: nil, keyEquivalent: "")
-    private var compatibilityItem = NSMenuItem(title: NSLocalizedString("View Compatibility…", comment: ""), action: #selector(showCompatibility), keyEquivalent: "")
-    private var profileItem = NSMenuItem(title: NSLocalizedString("Choose Browser to Sync…", comment: ""), action: #selector(changeProfile), keyEquivalent: "")
-    private var recoveryItem = NSMenuItem(title: NSLocalizedString("Resolve Sync Issue…", comment: ""), action: #selector(resolveBlockedIssue), keyEquivalent: "")
+    private var settingsWindow: NSWindow?
+    private let viewerEnabled = NSButton(checkboxWithTitle: NSLocalizedString("Enable Web viewer", comment: ""), target: nil, action: nil)
+    private let viewerOwner = NSTextField()
+    private let viewerOrigin = NSTextField()
+    private let viewerFeedback = NSTextField(wrappingLabelWithString: "")
     private var browserCheckboxes: [SupportedBrowser: NSButton] = [:]
     private var setupStartButton: NSButton?
     private var latestHealth: HealthSnapshot?
@@ -51,36 +52,13 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func makeMenu() -> NSMenu {
         let menu = NSMenu()
         menu.delegate = self
-        menu.addItem(withTitle: NSLocalizedString("Show Agent for Full Disk Access", comment: ""), action: #selector(revealAgent), keyEquivalent: "")
-        menu.addItem(healthItem)
+        for (name, action) in [("Open History", #selector(openWeb)), ("View Status", #selector(showSyncStatus)), ("Collect History Now", #selector(collectNow))] {
+            menu.addItem(withTitle: NSLocalizedString(name, comment: ""), action: action, keyEquivalent: "").target = self
+        }
         menu.addItem(.separator())
-        menu.addItem(withTitle: NSLocalizedString("View Sync Status…", comment: ""), action: #selector(showSyncStatus), keyEquivalent: "")
-        menu.addItem(profileItem)
-        menu.addItem(withTitle: NSLocalizedString("Configure Safari Sync Assist…", comment: ""), action: #selector(configureSafariAssist), keyEquivalent: "")
+        menu.addItem(withTitle: NSLocalizedString("Settings…", comment: ""), action: #selector(showSettings), keyEquivalent: ",").target = self
         menu.addItem(.separator())
-        menu.addItem(withTitle: NSLocalizedString("Configure History Collection…", comment: ""), action: #selector(configureCollection), keyEquivalent: "")
-        menu.addItem(withTitle: NSLocalizedString("Collect History Now", comment: ""), action: #selector(collectNow), keyEquivalent: "")
-        menu.addItem(withTitle: NSLocalizedString("Configure Web Viewer…", comment: ""), action: #selector(configureViewer), keyEquivalent: "")
-        menu.addItem(withTitle: NSLocalizedString("Open History on the Web", comment: ""), action: #selector(openWeb), keyEquivalent: "")
-        menu.addItem(withTitle: NSLocalizedString("Turn Sync On or Off…", comment: ""), action: #selector(toggleSync), keyEquivalent: "")
-        menu.addItem(withTitle: NSLocalizedString("Set Up Extensions & Login…", comment: ""), action: #selector(showSetup), keyEquivalent: "")
-        let troubleshooting = NSMenu()
-        troubleshooting.addItem(compatibilityItem)
-        troubleshooting.addItem(recoveryItem)
-        troubleshooting.addItem(withTitle: NSLocalizedString("Open Detailed Diagnostics…", comment: ""), action: #selector(showCloudDiagnostics), keyEquivalent: "")
-        let troubleshootingItem = NSMenuItem(title: NSLocalizedString("Troubleshooting", comment: ""), action: nil, keyEquivalent: "")
-        troubleshootingItem.submenu = troubleshooting
-        menu.addItem(troubleshootingItem)
-        menu.addItem(withTitle: NSLocalizedString("Refresh Status", comment: ""), action: #selector(refreshStatus), keyEquivalent: "r")
-        menu.addItem(.separator())
-        let quit = menu.addItem(withTitle: NSLocalizedString("Quit History Sync", comment: ""), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-        for item in menu.items + troubleshooting.items where item.action != nil { item.target = self }
-        quit.target = NSApp
-        menu.items.first(where: { $0.action == #selector(showSyncStatus) })?.toolTip = NSLocalizedString("View sync status without adding history or changing settings.", comment: "")
-        profileItem.toolTip = NSLocalizedString("View connected browsers. Confirm a choice to sync that browser's history with Safari.", comment: "")
-        recoveryItem.toolTip = NSLocalizedString("View the cause and recovery options. Review the changes before applying them.", comment: "")
-        profileItem.isHidden = true
-        recoveryItem.isHidden = true
+        menu.addItem(withTitle: NSLocalizedString("Quit History Sync", comment: ""), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q").target = NSApp
         return menu
     }
 
@@ -236,89 +214,12 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             await refreshStatusAsync()
             return
         }
-        if health.activeProfileID == nil, health.connectedProfiles.count == 1,
-           let profile = health.connectedProfiles.first {
-            do {
-                try await selectProfile(profile.profileID)
-                showMessage(title: NSLocalizedString("Setup Complete", comment: ""), detail: String(format: NSLocalizedString("Connected to %@.", comment: ""), String(describing: profile.displayName)))
-            } catch {
-                NSAlert(error: error).runModal()
-            }
-        } else if health.activeProfileID == nil, health.connectedProfiles.count > 1 {
-            latestHealth = health
-            changeProfile()
-        } else if health.connectedProfiles.isEmpty {
-            showMessage(title: NSLocalizedString("Waiting for the Extension", comment: ""), detail: NSLocalizedString("Load the extension, then choose Refresh Status in the menu.", comment: ""))
-        } else {
-            showMessage(title: NSLocalizedString("Setup Complete", comment: ""), detail: NSLocalizedString("History sync is ready.", comment: ""))
-        }
+        showMessage(title: NSLocalizedString("Setup Complete", comment: ""), detail: NSLocalizedString("Connect the selected profile in Settings → Browser Sync.", comment: ""))
         await refreshStatusAsync()
     }
 
-    @objc private func changeProfile() {
-        guard let health = latestHealth, !health.connectedProfiles.isEmpty else {
-            showMessage(title: NSLocalizedString("No Browser Connected", comment: ""), detail: NSLocalizedString("Open a browser with the extension enabled, then choose Refresh Status in the menu.", comment: ""))
-            return
-        }
-        let alert = NSAlert()
-        alert.messageText = NSLocalizedString("Choose a Browser to Sync with Safari", comment: "")
-        alert.informativeText = NSLocalizedString("Sync with This Browser switches two-way history sync to the selected profile. Pending deliveries stay with their original profile and are not sent to another profile.", comment: "")
-        let popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 360, height: 28))
-        for profile in health.connectedProfiles {
-            popup.addItem(withTitle: profile.displayName)
-        }
-        if let active = health.connectedProfiles.firstIndex(where: \.active) { popup.selectItem(at: active) }
-        alert.accessoryView = popup
-        alert.addButton(withTitle: NSLocalizedString("Sync with This Browser", comment: ""))
-        alert.addButton(withTitle: NSLocalizedString("Cancel", comment: ""))
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        let profile = health.connectedProfiles[popup.indexOfSelectedItem]
-        Task {
-            do {
-                try await selectProfile(profile.profileID)
-                showMessage(title: NSLocalizedString("Sync Browser Changed", comment: ""), detail: String(format: NSLocalizedString("Syncing with %@.", comment: ""), String(describing: profile.displayName)))
-                await refreshStatusAsync()
-            } catch {
-                NSAlert(error: error).runModal()
-            }
-        }
-    }
-
-    @objc private func refreshStatus() { Task { await refreshStatusAsync() } }
-
     private func refreshStatusAsync() async {
-        do {
-            var health = try await requestHealth()
-            if health.runtimeState == "ready",
-               health.activeProfileID == nil,
-               health.connectedProfiles.count == 1,
-               let profile = health.connectedProfiles.first {
-                try await selectProfile(profile.profileID)
-                health = try await requestHealth()
-            }
-            latestHealth = health
-            profileItem.isHidden = health.connectedProfiles.isEmpty
-            recoveryItem.isHidden = health.runtimeState != "blocked"
-            if health.runtimeState == "initializing" {
-                healthItem.title = NSLocalizedString("Starting Sync Service…", comment: "")
-            } else if health.runtimeState == "blocked" {
-                healthItem.title = message(for: health.issueCode)
-            } else if let active = health.activeProfileID,
-                      let profile = health.connectedProfiles.first(where: { $0.profileID == active }) {
-                healthItem.title = String(format: NSLocalizedString("Syncing · %@", comment: ""), String(describing: profile.displayName))
-            } else if health.activeProfileID != nil {
-                healthItem.title = NSLocalizedString("Waiting for Browser Extension", comment: "")
-            } else if health.connectedProfiles.isEmpty {
-                healthItem.title = NSLocalizedString("Waiting for Browser Extension", comment: "")
-            } else {
-                healthItem.title = NSLocalizedString("Choose a Browser to Sync", comment: "")
-            }
-        } catch {
-            latestHealth = nil
-            profileItem.isHidden = true
-            recoveryItem.isHidden = true
-            healthItem.title = NSLocalizedString("Sync Service Unavailable", comment: "")
-        }
+        latestHealth = try? await requestHealth()
     }
 
     private func requestHealth() async throws -> HealthSnapshot {
@@ -328,7 +229,10 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func showSyncStatus() {
         if statusWindow == nil {
-            statusWindow = SyncStatusWindow { [weak self] command in
+            statusWindow = SyncStatusWindow(viewerStatus: { [weak self] in
+                if self?.viewerProcess?.isRunning == true { return "Running" }
+                return UserDefaults.standard.bool(forKey: "viewerEnabled") ? "Unavailable" : "Off"
+            }) { [weak self] command in
                 guard let self else { throw TypedError(code: "MENU_UNAVAILABLE") }
                 return try await self.requestAsync(command)
             }
@@ -391,18 +295,6 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             } catch {
                 showMessage(title: NSLocalizedString("Sync Service Unavailable", comment: ""), detail: NSLocalizedString("Check the connection using Refresh Status or Set Up Extensions & Login… in the menu.", comment: ""))
             }
-        }
-    }
-
-    private func selectProfile(_ profileID: String) async throws {
-        let response = try await requestAsync(MenuCommand(operation: "selectProfile", profileID: profileID))
-        if let failure = try? JSONDecoder().decode(TypedError.self, from: response),
-           failure.type == "error" {
-            throw failure
-        }
-        let status = try JSONDecoder().decode(ProfileSwitchStatus.self, from: response)
-        guard status.state == "ACTIVE" else {
-            throw TypedError(code: "PROFILE_SELECTION_FAILED", retryable: true)
         }
     }
 
@@ -480,7 +372,13 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func resolveBlockedIssue() {
-        showBlockedIssue(latestHealth?.issueCode)
+        Task {
+            do {
+                let health = try await requestHealth()
+                if let issue = health.issueCode { showBlockedIssue(issue) }
+                else { showMessage(title: NSLocalizedString("No sync issue reported", comment: ""), detail: "") }
+            } catch { NSAlert(error: error).runModal() }
+        }
     }
 
     @objc private func showCompatibility() {
@@ -525,49 +423,76 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    @objc private func connectPair() {
+        Task {
+            do {
+                let configuration = try JSONDecoder().decode(CollectionReply.self, from: await requestAsync(MenuCommand(operation: "collectionStatus")))
+                let health = try await requestHealth()
+                if configuration.pair?.extensionID != nil || health.pendingSafariToBrowser + health.recoveryCount > 0 {
+                    let alert = NSAlert()
+                    alert.messageText = NSLocalizedString("Reconnect selected profile?", comment: "")
+                    alert.informativeText = NSLocalizedString("If the extension was reinstalled, connecting its new identity pauses sync and cancels deliveries for the previous identity.", comment: "")
+                    alert.addButton(withTitle: NSLocalizedString("Connect Selected Profile", comment: ""))
+                    alert.addButton(withTitle: NSLocalizedString("Cancel", comment: ""))
+                    guard alert.runModal() == .alertFirstButtonReturn else { return }
+                }
+                let data = try await requestAsync(MenuCommand(operation: "connectPair"))
+                if let error = try? JSONDecoder().decode(TypedError.self, from: data) { throw error }
+                let reply = try JSONDecoder().decode([String:String].self, from: data)
+                guard let source = reply["source"], let token = reply["token"],
+                      let split = source.firstIndex(of: ":"), let browser = SupportedBrowser(rawValue: String(source[..<split])),
+                      let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: browser.bundleIdentifier),
+                      let binary = Bundle(url: app)?.executableURL, let directory = setupCoordinator.inspect().extensionDirectory else { throw TypedError(code: "PAIR_NOT_READY") }
+                let id = try setupCoordinator.extensionID(in: directory)
+                let launch = Process()
+                launch.executableURL = binary
+                launch.arguments = ["--profile-directory=" + String(source[source.index(after: split)...]), "chrome-extension://\(id)/extension/connect.html#\(token)"]
+                try launch.run()
+            } catch { NSAlert(error: error).runModal() }
+        }
+    }
+
     @objc private func configureCollection() {
         Task {
             do {
-                let data = try await requestAsync(MenuCommand(operation: "collectionStatus"))
-                if let error = try? JSONDecoder().decode(TypedError.self, from: data), error.type == "error" { throw error }
-                let reply = try JSONDecoder().decode(CollectionReply.self, from: data)
-                let candidateData = try await requestAsync(MenuCommand(operation: "collectionCandidates"))
-                if let error = try? JSONDecoder().decode(TypedError.self, from: candidateData), error.type == "error" { throw error }
-                let discovery = try JSONDecoder().decode(CollectionCandidates.self, from: candidateData)
-                let candidates = discovery.candidates
-                let selected = Set(reply.sources.map(\.id))
+                let reply = try JSONDecoder().decode(CollectionReply.self, from: await requestAsync(MenuCommand(operation: "collectionStatus")))
+                let discovery = try JSONDecoder().decode(CollectionCandidates.self, from: await requestAsync(MenuCommand(operation: "collectionCandidates")))
+                let partners = discovery.candidates.filter { $0.browser == .chromium }
                 let alert = NSAlert()
                 alert.messageText = NSLocalizedString("History Collection", comment: "")
-                alert.informativeText = NSLocalizedString("Choose the browsers and profiles to keep in the history viewer. Removing a source removes its collected records. Pausing collection keeps them.", comment: "")
-                if !discovery.unavailableBrowsers.isEmpty {
-                    alert.informativeText += String(format: NSLocalizedString("\n\nCould not read profiles for %@. Check Full Disk Access for the Agent.", comment: ""), String(describing: discovery.unavailableBrowsers.joined(separator: ", ")))
+                alert.informativeText = NSLocalizedString("Select the profile to collect and sync with Safari.", comment: "")
+                let popup = NSPopUpButton()
+                popup.addItem(withTitle: NSLocalizedString("Select a profile", comment: ""))
+                for partner in partners {
+                    let entry = NSMenuItem(title: "\(partner.browserType) · \(partner.profileName) (\(partner.id))", action: nil, keyEquivalent: "")
+                    popup.menu?.addItem(entry)
                 }
+                if let index = partners.firstIndex(where: { $0.id == reply.pair?.source }) { popup.selectItem(at: index + 1) }
+                let enabled = NSButton(checkboxWithTitle: NSLocalizedString("Collect history", comment: ""), target: nil, action: nil)
+                enabled.state = reply.enabled ? .on : .off
+                let form = NSStackView(views: [popup,enabled])
+                form.orientation = .vertical
+                form.alignment = .leading
+                form.frame = NSRect(x: 0,y: 0,width: 420,height: 65)
+                alert.accessoryView = form
                 alert.addButton(withTitle: NSLocalizedString("Save", comment: ""))
                 alert.addButton(withTitle: NSLocalizedString("Cancel", comment: ""))
-                let stack = NSStackView(); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 5
-                let enabled = NSButton(checkboxWithTitle: NSLocalizedString("Collect history", comment: ""), target: nil, action: nil)
-                enabled.state = reply.enabled ? .on : .off; stack.addArrangedSubview(enabled)
-                var controls: [(HistoryCollectionSource, NSButton)] = []
-                for candidate in candidates {
-                    let status = reply.statuses.first { $0.id == candidate.id }
-                    let state = status.map { item in
-                        let last = item.lastSuccess.map { Date(timeIntervalSince1970: $0).formatted(date: .abbreviated, time: .shortened) } ?? NSLocalizedString("never", comment: "")
-                        return String(format: NSLocalizedString(" — %@, %@ saved, last success: %@", comment: ""), NSLocalizedString("collection." + item.state, value: item.state, comment: ""), String(describing: item.count), String(describing: last))
-                    } ?? ""
-                    let button = NSButton(checkboxWithTitle: "\(candidate.browserType) · \(candidate.profileName)\(state)", target: nil, action: nil)
-                    button.state = selected.contains(candidate.id) ? .on : .off
-                    stack.addArrangedSubview(button); controls.append((candidate, button))
-                }
-                stack.frame = NSRect(x: 0, y: 0, width: 440, height: max(54, CGFloat(candidates.count + 1) * 27))
-                let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 455, height: min(350, stack.frame.height)))
-                scroll.hasVerticalScroller = true; scroll.documentView = stack; alert.accessoryView = scroll
                 guard alert.runModal() == .alertFirstButtonReturn else { return }
-                let chosen = controls.filter { $0.1.state == .on }.map(\.0)
-                let shouldCollect = enabled.state == .on
-                let json = String(decoding: try JSONEncoder().encode(chosen), as: UTF8.self)
-                try await checkCommand(MenuCommand(operation: "setCollectionSources", snapshotJSON: json))
-                try await checkCommand(MenuCommand(operation: "setCollectionEnabled", result: shouldCollect ? "enable" : "disable"))
+                guard popup.indexOfSelectedItem > 0 else { throw TypedError(code:"PAIR_NOT_READY") }
+                let selected = partners[popup.indexOfSelectedItem-1]
+                let removed = reply.statuses.filter { $0.id != selected.id && $0.id != "safari:default" }.reduce(Int64(0)) { $0 + $1.count }
+                if selected.id != reply.pair?.source && (removed > 0 || reply.pair != nil || (reply.pendingCount ?? 0) > 0) {
+                    let count = reply.pendingCount ?? 0
+                    let confirm = NSAlert()
+                    confirm.messageText = NSLocalizedString("Change collection profile?", comment: "")
+                    confirm.informativeText = String(format: NSLocalizedString("Remove %@ collected visits and cancel %@ pending deliveries. Browser history is preserved.", comment: ""), String(removed), String(count))
+                    confirm.addButton(withTitle: NSLocalizedString("Change Profile", comment: ""))
+                    confirm.addButton(withTitle: NSLocalizedString("Cancel", comment: ""))
+                    guard confirm.runModal() == .alertFirstButtonReturn else { return }
+                }
+                try await checkCommand(MenuCommand(operation: "savePair", profileID: selected.id, result: enabled.state == .on ? "enable" : "disable", snapshotJSON: reply.pair?.revision ?? "", expectedRemoved: removed, expectedPending: reply.pendingCount))
                 try registerLoginItemIfNeeded()
+                await refreshPairLabel()
             } catch { NSAlert(error: error).runModal() }
         }
     }
@@ -591,7 +516,7 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 if let error = try? JSONDecoder().decode(TypedError.self, from: data), error.type == "error" { throw error }
                 let enabled = try JSONDecoder().decode(SyncPreferenceStatus.self, from: data).enabled
                 let alert = NSAlert(); alert.messageText = enabled ? NSLocalizedString("Turn Off Browser Sync?", comment: "") : NSLocalizedString("Turn On Browser Sync?", comment: "")
-                alert.informativeText = NSLocalizedString("History collection and Web viewing have separate settings. Pending sync work is retained.", comment: "")
+                alert.informativeText = NSLocalizedString("Sync requires collection and a connected profile. Pausing sync keeps pending deliveries.", comment: "")
                 alert.addButton(withTitle: enabled ? NSLocalizedString("Turn Off", comment: "") : NSLocalizedString("Turn On", comment: "")); alert.addButton(withTitle: NSLocalizedString("Cancel", comment: ""))
                 guard alert.runModal() == .alertFirstButtonReturn else { return }
                 try await checkCommand(MenuCommand(operation: "setSyncEnabled", result: enabled ? "disable" : "enable"))
@@ -600,31 +525,91 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    @objc private func configureViewer() {
+    private let pairLabel = NSTextField(wrappingLabelWithString: "")
+
+    private func refreshPairLabel() async {
+        do {
+            let reply = try JSONDecoder().decode(CollectionReply.self, from: await requestAsync(MenuCommand(operation: "collectionStatus")))
+            if let pair = reply.pair, let source = reply.sources.first(where: { $0.id == pair.source }) {
+                let state = NSLocalizedString(reply.extensionUpdateRequired == true ? "Reload the bundled extension in the selected profile." : (pair.extensionID == nil ? "Extension not connected" : "Extension connected"), comment: "")
+                pairLabel.stringValue = "Safari ↔ " + source.browserType + " · " + source.profileName + " (" + source.id + ")\n" + state
+            } else {
+                pairLabel.stringValue = NSLocalizedString("Select a profile in History Collection.", comment: "")
+            }
+        } catch { pairLabel.stringValue = NSLocalizedString("Collection status unavailable", comment: "") }
+    }
+
+    @objc private func showSettings() {
+        if settingsWindow == nil {
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 375),
+                                  styleMask: [.titled, .closable], backing: .buffered, defer: false)
+            window.title = NSLocalizedString("Settings…", comment: "")
+            window.isReleasedWhenClosed = false
+            let tabs = NSTabView(frame: window.contentView!.bounds.insetBy(dx: 16, dy: 16))
+            window.contentView!.addSubview(tabs)
+            func pane(_ title: String, _ actions: [(String, Selector)]) -> NSStackView {
+                let page = NSTabViewItem(identifier: title)
+                page.label = NSLocalizedString(title, comment: "")
+                let container = NSView()
+                let stack = NSStackView()
+                stack.orientation = .vertical
+                stack.alignment = .leading
+                stack.spacing = 8
+                stack.translatesAutoresizingMaskIntoConstraints = false
+                container.addSubview(stack)
+                NSLayoutConstraint.activate([
+                    stack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
+                    stack.topAnchor.constraint(equalTo: container.topAnchor, constant: 14),
+                    stack.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor, constant: -16)
+                ])
+                for (name, action) in actions {
+                    stack.addArrangedSubview(NSButton(title: NSLocalizedString(name, comment: ""), target: self, action: action))
+                }
+                page.view = container
+                tabs.addTabViewItem(page)
+                return stack
+            }
+            _ = pane("General", [("Set Up Extensions & Login…", #selector(showSetup)), ("Show Agent for Full Disk Access", #selector(revealAgent)), ("View Compatibility…", #selector(showCompatibility)), ("Resolve Sync Issue…", #selector(resolveBlockedIssue)), ("Open Detailed Diagnostics…", #selector(showCloudDiagnostics))])
+            _ = pane("History Collection", [("Configure History Collection…", #selector(configureCollection))])
+            let web = pane("Web Viewer", [])
+            let defaults = UserDefaults.standard
+            viewerEnabled.state = defaults.bool(forKey: "viewerEnabled") ? .on : .off
+            web.addArrangedSubview(viewerEnabled)
+            for (label, field, key) in [("Tailscale login", viewerOwner, "viewerOwner"), ("Viewer URL", viewerOrigin, "viewerOrigin")] {
+                web.addArrangedSubview(NSTextField(labelWithString: NSLocalizedString(label, comment: "")))
+                field.setAccessibilityLabel(NSLocalizedString(label, comment: ""))
+                field.stringValue = defaults.string(forKey: key) ?? ""
+                field.widthAnchor.constraint(equalToConstant: 410).isActive = true
+                web.addArrangedSubview(field)
+            }
+            web.addArrangedSubview(NSButton(title: NSLocalizedString("Save", comment: ""), target: self, action: #selector(saveViewer(_:))))
+            web.addArrangedSubview(viewerFeedback)
+            let sync = pane("Browser Sync", [("Turn Sync On or Off…", #selector(toggleSync)), ("Connect Selected Profile", #selector(connectPair)), ("Configure Safari Sync Assist…", #selector(configureSafariAssist))])
+            sync.insertArrangedSubview(pairLabel, at: 0)
+            window.center()
+            settingsWindow = window
+        }
+        Task { await refreshPairLabel() }
+        settingsWindow?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @objc private func saveViewer(_ sender: NSButton) {
         let defaults = UserDefaults.standard
-        let alert = NSAlert(); alert.messageText = NSLocalizedString("Web Viewer", comment: "")
-        alert.informativeText = NSLocalizedString("Enter your Tailscale login and the HTTPS URL served by Tailscale Serve. Only requests from this login are accepted. Configure Serve separately before opening the viewer.", comment: "")
-        alert.addButton(withTitle: NSLocalizedString("Save", comment: "")); alert.addButton(withTitle: NSLocalizedString("Cancel", comment: ""))
-        let stack = NSStackView(); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 8
-        let enabled = NSButton(checkboxWithTitle: NSLocalizedString("Enable Web viewer", comment: ""), target: nil, action: nil)
-        enabled.state = defaults.bool(forKey: "viewerEnabled") ? .on : .off
-        let owner = NSTextField(string: defaults.string(forKey: "viewerOwner") ?? ""); owner.placeholderString = NSLocalizedString("Tailscale login", comment: "")
-        let origin = NSTextField(string: defaults.string(forKey: "viewerOrigin") ?? ""); origin.placeholderString = "https://your-device.tailnet.ts.net/"
-        owner.widthAnchor.constraint(equalToConstant: 420).isActive = true; origin.widthAnchor.constraint(equalToConstant: 420).isActive = true
-        stack.addArrangedSubview(enabled); stack.addArrangedSubview(owner); stack.addArrangedSubview(origin)
-        stack.frame = NSRect(x: 0, y: 0, width: 430, height: 100); alert.accessoryView = stack
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        let login = owner.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        let address = origin.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        let shouldEnable = enabled.state == .on
+        let login = viewerOwner.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let address = viewerOrigin.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let shouldEnable = viewerEnabled.state == .on
         if shouldEnable {
             guard !login.isEmpty, let url = URL(string: address), url.scheme?.lowercased() == "https", url.host != nil,
                   url.user == nil, url.password == nil, url.fragment == nil, url.query == nil,
                   (url.path.isEmpty || url.path == "/") else {
-                showMessage(title: NSLocalizedString("Viewer Settings Incomplete", comment: ""), detail: NSLocalizedString("Enter a Tailscale login and an HTTPS URL.", comment: "")); return
+                viewerFeedback.stringValue = NSLocalizedString("Enter a Tailscale login and an HTTPS URL.", comment: "")
+                return
             }
         }
+        sender.isEnabled = false
         Task {
+            defer { sender.isEnabled = true }
             do {
                 if shouldEnable {
                     try await checkCommand(MenuCommand(operation: "setViewerOrigin", snapshotJSON: address))
@@ -637,7 +622,8 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }
                 if shouldEnable { try await startViewer() }
                 try registerLoginItemIfNeeded()
-            } catch { NSAlert(error: error).runModal() }
+                viewerFeedback.stringValue = NSLocalizedString("Saved", comment: "")
+            } catch { viewerFeedback.stringValue = error.localizedDescription }
         }
     }
 

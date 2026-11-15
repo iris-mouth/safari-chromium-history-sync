@@ -5,10 +5,10 @@
 The system exposes three behavior-level interfaces:
 
 - `browserExchange(message) -> receipt | page | typedError`
-- `selectProfile(profileId) -> switchStatus`
+- `savePair(sourceId, expectedRevision) -> collectionStatus`
 - `status() -> healthSnapshot`
 
-The extension implementation is in `extension/sync_controller.js`; the FDA implementation is `AgentService`. Both use protocol version 1 and bounded pages of at most 128 events. Tests exercise the extension through these interfaces rather than its internal queue representation.
+The extension implementation is in `extension/worker.js`; the FDA implementation is `AgentService`. Both use protocol version 1 and bounded pages of at most 128 events. Tests exercise the extension through these interfaces rather than its internal queue representation.
 
 The deep modules are:
 
@@ -45,8 +45,8 @@ The threat boundary assumes the current macOS account is not already compromised
 
 Each direction is a durable monotonic stream with random source event IDs:
 
-- `browserToSafari`: browser resolver → Agent insert receipt.
-- `safariToBrowser`: Safari arrival cursor → browser evidence receipt.
+- `browserToSafari`: Chromium DB scan or extension visit → collected visit → live browser evidence → Safari insert receipt.
+- `safariToBrowser`: Safari DB scan → collected visit → Agent outbox → browser evidence receipt.
 
 Pages and receipts are bounded and cumulative. The active browser applies at most one Safari event at a time, preventing a later evidence result from cumulatively acknowledging an earlier unresolved event.
 
@@ -106,9 +106,9 @@ The journal retains detailed applied records for seven days and bounds entries a
 
 ## Profile switching
 
-The Agent persists exactly one active profile. Selecting another connected profile changes that value atomically; there is no staging profile or freeze handshake. Browser outbox, Agent recovery entries, and delivery progress remain keyed by their originating profile. Pending work is not transferred during a switch and resumes only if that profile becomes active again. The global Safari arrival cursor continues from its current point, so newly observed Safari visits belong to the profile active when they are discovered.
+The viewing database owns one pair, identified by the Safari source and a Chrome or Edge profile directory. The Menu launches that directory with a short-lived connection challenge. The Agent binds the responding extension instance to the current revision. Collection can run before this binding. Sync requires an explicit opt-in, two completed source baselines, and a valid Safari anchor.
 
-The Agent learns candidate profile IDs from ordinary authenticated Extension traffic before touching Safari data. A single connected candidate is selected automatically when no active profile exists; multiple candidates require a Menu choice. Candidate presence is ephemeral and rebuilt after Agent restart, while the active profile remains in sealed state.
+Collected visits and pending delivery candidates commit together. Changing the selected directory creates a new pair revision, removes the previous Chromium rows and invalidates queued deliveries. The sealed Agent state reconciles its revision after a switch and on restart. Pausing collection also closes the routing gate. Enabling routing records the maximum native visit ID from each source so previously existing visits are excluded.
 
 ## Setup and distribution
 

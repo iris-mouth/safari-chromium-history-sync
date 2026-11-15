@@ -22,11 +22,23 @@ public struct SyncEvent: Codable, Equatable, Sendable {
     }
 }
 
+public struct ReportedVisit: Codable, Sendable {
+    public let visitId: String
+    public let visitTime: Double
+    public let url: String
+    public let title: String?
+}
+
 public struct BrowserMessage: Codable, Sendable {
     public let version: Int
     public let operation: String
     public let profileID: String
     public let events: [SyncEvent]?
+    public var revision: String? = nil
+    public var token: String? = nil
+    public var confirmed: [String]? = nil
+    public var missing: [String]? = nil
+    public var visits: [ReportedVisit]? = nil
     public let afterSequence: Int64?
     public let throughSequence: Int64?
     public let limit: Int?
@@ -47,7 +59,7 @@ public struct BrowserMessage: Codable, Sendable {
         case heldCount, capabilities, localReceipts, removedURLs, allHistoryRemoved, removedAt
         case eventID = "eventId"
         case profileID = "profileId"
-        case afterSequence, throughSequence
+        case revision, token, visits, confirmed, missing, afterSequence, throughSequence
     }
 }
 
@@ -94,7 +106,7 @@ public struct TypedError: Codable, Error, Equatable, Sendable, LocalizedError {
         self.retryable = retryable
     }
 
-    public var errorDescription: String? { code }
+    public var errorDescription: String? { NSLocalizedString(code, value: code, comment: "") }
 }
 
 public struct HealthSnapshot: Codable, Equatable, Sendable {
@@ -159,10 +171,12 @@ public struct MenuCommand: Codable, Sendable {
     public let result: String?
     public let device: String?
     public let snapshotJSON: String?
+    public let expectedRemoved: Int64?
+    public let expectedPending: Int64?
 
     public init(operation: String, profileID: String? = nil, provider: CloudProvider? = nil,
                 deliveryID: String? = nil, planID: String? = nil, result: String? = nil,
-                device: String? = nil, snapshotJSON: String? = nil) {
+                device: String? = nil, snapshotJSON: String? = nil, expectedRemoved: Int64? = nil, expectedPending: Int64? = nil) {
         self.operation = operation
         self.profileID = profileID
         self.provider = provider
@@ -170,11 +184,13 @@ public struct MenuCommand: Codable, Sendable {
         self.planID = planID
         self.result = result
         self.device = device
+        self.expectedRemoved = expectedRemoved
+        self.expectedPending = expectedPending
         self.snapshotJSON = snapshotJSON
     }
 
     enum CodingKeys: String, CodingKey {
-        case operation, provider, deliveryID, planID, result, device, snapshotJSON
+        case operation, provider, deliveryID, planID, result, device, snapshotJSON, expectedRemoved, expectedPending
         case profileID = "profileId"
     }
 }

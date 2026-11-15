@@ -167,7 +167,7 @@ public struct HistoryReader: Sendable {
         try db.exec("BEGIN")
         defer { try? db.exec("ROLLBACK") }
         let version = try db.query("PRAGMA user_version")
-        guard try version.step(), version.int64(0) == 4 else { throw HistoryReaderError.unavailable }
+        guard try version.step(), (4...5).contains(version.int64(0)) else { throw HistoryReaderError.unavailable }
         return try body(db)
     }
 
