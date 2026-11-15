@@ -29,6 +29,7 @@ async function harness(t, { capabilities = ["cloud-delivery-v1"], failAck = fals
   });
   globalThis.chrome = {
     storage: { local: {
+      async getKeys() { return Object.keys(stored); },
       async get(key) { return { [key]: structuredClone(stored[key]) }; },
       async set(values) {
         if (failIntent && values[runtimeKey]?.pendingEvidence?.[event.eventId]) {
@@ -413,4 +414,14 @@ test("queued browser visits are checked against source history before replay", a
   const restarted = await h.restart();
   await restarted.exchange();
   assert.equal(h.requests.filter((request) => request.operation === "collectVisits").length, 2);
+});
+
+test("worker discards only unverifiable legacy visits before exchange", async t => {
+  const h = await harness(t, { noImport: true });
+  const verified = { eventId: "valid", sourceKey: "https://fixture.test/\n12" };
+  h.stored.sync_state_generation_1 = { schemaVersion: 2, browserToSafari: [{eventId:"old"}, verified],
+    heldBrowserVisits: [{eventId:"held"}], safariToBrowser: [{eventId:"incoming"}] };
+  await h.worker.exchange();
+  assert.deepEqual(h.stored.sync_state_generation_1, { schemaVersion: 2, browserToSafari: [verified],
+    heldBrowserVisits: [], safariToBrowser: [{eventId:"incoming"}] });
 });

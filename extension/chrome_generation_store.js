@@ -23,3 +23,19 @@ export function createChromeGenerationStore(storage) {
     },
   };
 }
+
+// Old workers could keep two committed generations and an interrupted write.
+export async function discardUnverifiableLegacyVisits(storage) {
+  const keys = (await storage.getKeys()).filter(key => /^sync_state_generation_\d+$/.test(key));
+  for (const key of keys) {
+    const state = (await storage.get(key))[key];
+    if (![1, 2].includes(state?.schemaVersion)) continue;
+    const pending = state.browserToSafari;
+    const held = state.heldBrowserVisits;
+    const retained = Array.isArray(pending) ? pending.filter(event => event?.sourceKey) : pending;
+    if (retained?.length === pending?.length && !held?.length) continue;
+    const updated = { ...state, heldBrowserVisits: [] };
+    if (Array.isArray(retained)) updated.browserToSafari = retained;
+    await storage.set({ [key]: updated });
+  }
+}

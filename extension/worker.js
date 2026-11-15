@@ -1,3 +1,4 @@
+import { discardUnverifiableLegacyVisits } from "./chrome_generation_store.js";
 import { PROTOCOL_VERSION, isReceipt, isWebUrl } from "./protocol.js";
 import {
   hasPendingImport,
@@ -340,7 +341,12 @@ async function collectionPolicy(state) {
   return policy;
 }
 
+let legacyChecked = false;
 export async function exchange() {
+  if (!legacyChecked) {
+    await discardUnverifiableLegacyVisits(chrome.storage.local);
+    legacyChecked = true;
+  }
   const policy = await collectionPolicy(await runtimeState());
   if (!policy?.collect) return;
   const state = await runtimeState();
