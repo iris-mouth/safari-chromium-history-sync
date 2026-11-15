@@ -5,7 +5,7 @@ let instance = 0;
 const runtimeKey = "browser_runtime_v1";
 
 async function harness(t, { capabilities = ["cloud-delivery-v1"], failAck = false, failAdd = false,
-  failIntent = false, noImport = false, cancelAck = false } = {}) {
+  failIntent = false, noImport = false, cancelAck = false, failPublish = false } = {}) {
   const stored = {};
   const listeners = {};
   const requests = [];
@@ -54,6 +54,7 @@ async function harness(t, { capabilities = ["cloud-delivery-v1"], failAck = fals
       onInstalled: { addListener() {} }, onStartup: { addListener() {} },
       async sendNativeMessage(host, message) {
         requests.push(structuredClone(message));
+        if (message.operation === "publish" && failPublish) throw new Error("Agent stopped");
         if (message.operation === "pull") {
           return { type: "page", stream: "safariToBrowser", events: complete ? [] : [event],
             hasMore: false, ...(capabilities ? { capabilities } : {}) };
@@ -78,6 +79,7 @@ async function harness(t, { capabilities = ["cloud-delivery-v1"], failAck = fals
   const worker = await restart();
   return { worker, restart, event, stored, visits, requests, listeners,
     get adds() { return adds; },
+    resumeAgent() { failPublish = false; },
     due() { stored[runtimeKey].pendingEvidence[event.eventId].dueAt = 0; },
   };
 }
@@ -391,4 +393,19 @@ test("initial capability negotiation reports old removals and refetches before w
   await h.worker.exchange();
   assert.equal(h.adds, 1);
   assert.deepEqual(h.requests.map((request) => request.operation), ["pull", "cloudRemoval", "pull"]);
+});
+
+
+test("queued browser visits are checked against source history before replay", async (t) => {
+  const h = await harness(t, { noImport: true, failPublish: true });
+  const url = "https://example.test/removed-while-stopped";
+  h.visits.set(url, [{ visitId: "42", visitTime: Date.now() }]);
+  await h.listeners.visited({ url, title: "Visit", lastVisitTime: Date.now() });
+  await assert.rejects(h.worker.exchange(), /Agent stopped/);
+  assert.equal(h.requests.filter((request) => request.operation === "publish").length, 1);
+  h.visits.set(url, []);
+  h.resumeAgent();
+  const restarted = await h.restart();
+  await restarted.exchange();
+  assert.equal(h.requests.filter((request) => request.operation === "publish").length, 1);
 });

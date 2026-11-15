@@ -19,11 +19,16 @@ if [[ -z "${SDKROOT:-}" \
   && -d /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk ]]; then
   export SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk
 fi
-for product in SafariSyncMenu SafariSyncBridge SafariSyncAgent; do
+npm --prefix "$ROOT/web" run build
+for product in SafariSyncMenu SafariSyncBridge SafariSyncAgent SafariSyncViewer; do
   swift build --disable-sandbox --package-path "$ROOT" -c release --product "$product"
 done
 rm -rf "$APP" "$AGENT_APP" "$LEGACY_APP" "$PKG"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/ChromiumExtension" "$AGENT_APP/Contents/MacOS" "$AGENT_APP/Contents/Resources"
+VIEWER_APP="$APP/Contents/Helpers/Safari Chromium History Sync Viewer.app"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/ChromiumExtension" "$AGENT_APP/Contents/MacOS" "$AGENT_APP/Contents/Resources" "$VIEWER_APP/Contents/MacOS" "$VIEWER_APP/Contents/Resources/Web"
+cp "$ROOT/.build/release/SafariSyncViewer" "$VIEWER_APP/Contents/MacOS/"
+cp "$ROOT/Packaging/Viewer-Info.plist" "$VIEWER_APP/Contents/Info.plist"
+cp -R "$ROOT/web/dist/". "$VIEWER_APP/Contents/Resources/Web/"
 cp "$ROOT/.build/release/SafariSyncMenu" "$APP/Contents/MacOS/"
 cp "$ROOT/.build/release/SafariSyncBridge" "$APP/Contents/MacOS/"
 cp "$ROOT/.build/release/SafariSyncAgent" "$AGENT_APP/Contents/MacOS/"
@@ -38,6 +43,7 @@ for source in protocol.js sync_controller.js chrome_generation_store.js worker.j
 done
 
 SIGN_OPTIONS=(--force --options runtime --sign -)
+codesign "${SIGN_OPTIONS[@]}" --entitlements "$ROOT/Packaging/Viewer.entitlements" "$VIEWER_APP"
 codesign "${SIGN_OPTIONS[@]}" "$APP/Contents/MacOS/SafariSyncBridge"
 codesign "${SIGN_OPTIONS[@]}" --entitlements "$ROOT/Packaging/Agent.entitlements" "$AGENT_APP"
 codesign "${SIGN_OPTIONS[@]}" "$APP"

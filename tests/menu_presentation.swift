@@ -1,10 +1,33 @@
 // Compiled with the actual Menu view/controller sources by scripts/check-menu.sh.
 import AppKit
 import SafariSyncCore
+import ServiceManagement
 
 @main @MainActor struct PresentationCheck {
     static func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
     static func main() async throws {
+        var loginStatus = SMAppService.Status.notFound
+        var registrations = 0
+        let registered = try LoginItemRegistration.ensure(status: { loginStatus }, register: {
+            registrations += 1; loginStatus = .enabled
+        })
+        precondition(registered == .ready && registrations == 1, "a previously unseen app must be registered")
+        let ready = try LoginItemRegistration.ensure(status: { .enabled }, register: { registrations += 1 })
+        precondition(ready == .ready && registrations == 1, "an enabled app must not be registered again")
+        let approval = try LoginItemRegistration.ensure(status: { .requiresApproval }, register: { registrations += 1 })
+        precondition(approval == .requiresApproval && registrations == 1, "a disabled app must request approval")
+        loginStatus = .notFound
+        let newApproval = try LoginItemRegistration.ensure(status: { loginStatus }, register: { loginStatus = .requiresApproval })
+        precondition(newApproval == .requiresApproval, "registration requiring approval is not reported as ready")
+        enum SyntheticLoginError: Error { case failed }
+        do {
+            _ = try LoginItemRegistration.ensure(status: { .notFound }, register: { throw SyntheticLoginError.failed })
+            preconditionFailure("registration errors cannot be swallowed")
+        } catch SyntheticLoginError.failed { }
+        do {
+            _ = try LoginItemRegistration.ensure(status: { .notFound }, register: {})
+            preconditionFailure("an unresolved status cannot be reported as registered")
+        } catch is LoginItemRegistration.Unavailable { }
         let app = NSApplication.shared
         app.setActivationPolicy(.prohibited)
         let delegate = MenuDelegate()
@@ -13,6 +36,29 @@ import SafariSyncCore
         precondition(!topActions.contains("showCloudDiagnostics"))
         precondition(topActions.contains("showSyncStatus"))
         precondition(topActions.contains("configureSafariAssist"))
+        precondition(topActions.contains("configureCollection"))
+        precondition(topActions.contains("configureViewer"))
+        precondition(topActions.contains("toggleSync"))
+        precondition(menu.items.contains { $0.title == "Quit History Sync" })
+        let fakeHome = FileManager.default.temporaryDirectory.appendingPathComponent("profile-test-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: fakeHome) }
+        let chrome = fakeHome.appendingPathComponent("Library/Application Support/Google/Chrome")
+        try FileManager.default.createDirectory(at: chrome.appendingPathComponent("Default"), withIntermediateDirectories: true)
+        try Data(#"{"profile":{"info_cache":{"Default":{"name":"Personal"}}}}"#.utf8).write(to: chrome.appendingPathComponent("Local State"))
+        let missing = HistoryCollectionSource(id: "edge:Profile 8", browser: .chromium, browserType: "Edge", profileName: "Away", path: "/synthetic/missing")
+        let discovery = CollectionProfiles.discover(home: fakeHome, selected: [missing])
+        let candidates = discovery.candidates
+        precondition(candidates.contains { $0.id == "chrome:Default" && $0.profileName == "Personal" })
+        precondition(candidates.contains { $0.id == missing.id }, "temporarily missing selections remain available")
+        precondition(candidates.contains { $0.id == "safari:default" })
+        precondition(discovery.unavailableBrowsers.isEmpty, "missing browser installations are not access failures")
+        let edge = fakeHome.appendingPathComponent("Library/Application Support/Microsoft Edge")
+        try FileManager.default.createDirectory(at: edge, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: edge.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: edge.path) }
+        let inaccessible = CollectionProfiles.discover(home: fakeHome, selected: [missing])
+        precondition(inaccessible.unavailableBrowsers.contains("Edge"), "access failures are reported")
+        precondition(inaccessible.candidates.contains { $0.id == missing.id }, "an inaccessible source remains selected")
         precondition(!topActions.contains { $0.lowercased().contains("probe") })
         let now = Date()
         var cloud = CloudDeliveryCoordinator()

@@ -1,0 +1,72 @@
+{
+  "conditions": {
+    "date_local": "2026-11-14",
+    "platform": "macOS-27.2.1-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "python": "3.14.7",
+    "network": "localhost; separate Swift Viewer process",
+    "cache": "fixture generation warms filesystem cache; four sequential requests",
+    "search_wait_ms": 300,
+    "note": "Local synthetic measurement, not an iPhone or Tailscale target measurement."
+  },
+  "results": [
+    {
+      "records": 100000,
+      "fixture_generation_seconds": 0.077,
+      "initial_collection_seconds": 4.213,
+      "queries": {
+        "day": {
+          "seconds": [
+            0.113,
+            0.1107,
+            0.1097,
+            0.1082
+          ],
+          "median_seconds": 0.1102,
+          "items": 200,
+          "response_bytes": 62340
+        },
+        "search": {
+          "seconds": [
+            0.0552,
+            0.0549,
+            0.055,
+            0.0545
+          ],
+          "median_seconds": 0.055,
+          "items": 100,
+          "response_bytes": 31907
+        }
+      }
+    },
+    {
+      "records": 1000000,
+      "fixture_generation_seconds": 0.836,
+      "initial_collection_seconds": 46.724,
+      "queries": {
+        "day": {
+          "seconds": [
+            0.1128,
+            0.1098,
+            0.1121,
+            0.1137
+          ],
+          "median_seconds": 0.1125,
+          "items": 200,
+          "response_bytes": 62885
+        },
+        "search": {
+          "seconds": [
+            0.1183,
+            0.1193,
+            0.1174,
+            0.1144
+          ],
+          "median_seconds": 0.1179,
+          "items": 200,
+          "response_bytes": 64261
+        }
+      }
+    }
+  ]
+}

@@ -4,6 +4,11 @@ Sync **new browsing history** between Safari and one active Google Chrome or
 Microsoft Edge profile on your Mac. Other devices receive history through each
 browser's built-in account sync.
 
+The development tree also contains an integrated history viewer. Its current
+scope and outstanding validation are tracked in
+[the integration status](docs/INTEGRATION-IMPLEMENTATION-STATUS.md). The release
+linked below remains the previously published sync-only version.
+
 ## Download
 
 [Download v6.1.4 / build 614](https://github.com/iris-mouth/safari-chromium-history-sync/releases/tag/v6.1.4)
@@ -51,6 +56,33 @@ For history to reach your iPhone or iPad, enable the browser's built-in history
 sync and use the matching account on each device. Arrival can take time; check
 the receiving device's history to confirm it. The Mac's status alone does not
 prove arrival.
+
+## Integrated viewer in the development build
+
+The development PKG adds a separate history collector and Web viewer; these are
+not included in the v6.1.4 release linked above. Grant Full Disk Access to
+**Safari Chromium History Sync Agent.app**, then use **Configure History
+Collection…** to choose the Safari, Chrome and Edge profiles to collect. These
+selections are independent of the single browser profile used for sync. Pausing
+collection keeps the collected records; removing a source removes its records
+from the viewer, without deleting the browser's history.
+
+In **Configure Web Viewer…**, enable the viewer and enter your Tailscale login
+and the HTTPS root URL for this Mac's Tailscale name. Configure Tailscale Serve
+to forward that URL to the local viewer on `127.0.0.1:8766`. For example, when
+HTTPS port 443 is available or you have deliberately chosen to replace its
+existing mapping:
+
+```sh
+tailscale serve status
+tailscale serve --bg --https=443 http://127.0.0.1:8766
+```
+
+Connect the other device to Tailscale using the same account, then open the
+configured HTTPS URL. The viewer accepts requests for the configured Tailscale
+login. **Open History on the Web** opens that URL on the Mac. Sync, collection
+and the viewer have separate controls; quitting the menu app stops its Agent
+and viewer. The app can be configured to start again at login.
 
 ## Limits
 

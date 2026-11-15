@@ -198,5 +198,13 @@ export function createSyncController({ store }) {
     });
   }
 
-  return { browserExchange, status };
+  async function discardMissingBrowserVisits(profileId, eventIds) {
+    const missing = new Set(eventIds);
+    return transact((state) => {
+      state.browserToSafari = state.browserToSafari.filter((event) =>
+        event.profileId !== profileId || !missing.has(event.eventId));
+    });
+  }
+
+  return { browserExchange, status, discardMissingBrowserVisits };
 }

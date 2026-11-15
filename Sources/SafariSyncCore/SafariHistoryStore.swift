@@ -28,6 +28,15 @@ public struct SafariArrivalCursor: Codable, Equatable, Sendable {
     }
 }
 
+public struct SafariCursorInspection: Codable, Equatable, Sendable {
+    public let identityMatches: Bool
+    public let anchorState: String
+    /// A comparison of native IDs only; this is not a count of undelivered visits.
+    public let visitsAfterCursorID: Int64
+    public let matchedAnchorUnixTime: Double?
+    public let latestLaterUnixTime: Double?
+}
+
 public struct SafariVisit: Codable, Equatable, Sendable {
     public let visitID: Int64
     public let url: URL
@@ -100,6 +109,52 @@ public final class SafariHistoryStore: @unchecked Sendable {
                 visitID: 0,
                 rowAuthenticator: rowHMAC(id: 0, url: "EMPTY", time: 0, key: authenticationKey)
             )
+        }
+    }
+
+    /// Diagnostic only: never advances the cursor or returns URLs, titles or keys.
+    public func inspectCursor(_ cursor: SafariArrivalCursor, authenticationKey: Data) throws -> SafariCursorInspection {
+        try lock.withLock {
+            let identity = try databaseIdentity()
+            let db = try Connection(path: databaseURL.path, readOnly: true)
+            defer { db.close() }
+            try db.exec("PRAGMA query_only=ON")
+            try db.exec("BEGIN")
+            defer { try? db.exec("ROLLBACK") }
+            try validateSchema(db)
+            let anchor: String
+            var anchorTime: Double?
+            if cursor.visitID == 0 {
+                anchor = rowHMAC(id: 0, url: "EMPTY", time: 0, key: authenticationKey) == cursor.rowAuthenticator ? "matches" : "changed"
+            } else {
+                let query = try db.prepare("""
+                  SELECT hi.url, hv.visit_time FROM history_visits hv
+                  JOIN history_items hi ON hi.id=hv.history_item WHERE hv.id=?
+                  """)
+                defer { sqlite3_finalize(query) }
+                sqlite3_bind_int64(query, 1, cursor.visitID)
+                switch sqlite3_step(query) {
+                case SQLITE_DONE: anchor = "missing"
+                case SQLITE_ROW:
+                    let visitTime = sqlite3_column_double(query, 1)
+                    let value = rowHMAC(id: cursor.visitID, url: columnText(query, index: 0),
+                                        time: visitTime, key: authenticationKey)
+                    anchor = value == cursor.rowAuthenticator ? "matches" : "changed"
+                    let unixTime = visitTime + 978_307_200
+                    if anchor == "matches", unixTime.isFinite { anchorTime = unixTime }
+                default: throw db.error()
+                }
+            }
+            let count = try db.prepare("SELECT count(*),max(visit_time) FROM history_visits WHERE id>?")
+            defer { sqlite3_finalize(count) }
+            sqlite3_bind_int64(count, 1, cursor.visitID)
+            guard sqlite3_step(count) == SQLITE_ROW else { throw db.error() }
+            guard try databaseIdentity() == identity else { throw SafariHistoryError.historyIdentityChanged }
+            let latestValue = sqlite3_column_double(count, 1) + 978_307_200
+            let latest: Double? = sqlite3_column_type(count, 1) != SQLITE_NULL && latestValue.isFinite ? latestValue : nil
+            return SafariCursorInspection(identityMatches: identity == cursor.databaseIdentity,
+                                          anchorState: anchor, visitsAfterCursorID: sqlite3_column_int64(count, 0),
+                                          matchedAnchorUnixTime: anchorTime, latestLaterUnixTime: latest)
         }
     }
 
@@ -481,8 +536,9 @@ private final class DeliveryLedger {
 
 final class Connection {
     fileprivate var handle: OpaquePointer?
-    init(path: String, create: Bool = false) throws {
-        let flags = SQLITE_OPEN_READWRITE | (create ? SQLITE_OPEN_CREATE : 0)
+    init(path: String, create: Bool = false, readOnly: Bool = false) throws {
+        precondition(!(create && readOnly))
+        let flags = readOnly ? SQLITE_OPEN_READONLY : SQLITE_OPEN_READWRITE | (create ? SQLITE_OPEN_CREATE : 0)
         guard sqlite3_open_v2(path, &handle, flags, nil) == SQLITE_OK else {
             throw SafariHistoryError.databaseUnavailable(path)
         }

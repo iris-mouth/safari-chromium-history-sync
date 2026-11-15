@@ -1,0 +1,5 @@
+module CUnicode [system] {
+  header "shim.h"
+  link "icucore"
+  export *
+}

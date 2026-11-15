@@ -19,13 +19,21 @@ func expect<T: Equatable>(_ actual: T, _ expected: T, _ message: String) throws 
 
 struct SafariSyncCoreIntegrationTests {
     static func main() throws {
+        if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--exclusive-history-fixture" {
+            try HistorySourceSnapshotTests.runExclusiveWriter(path: CommandLine.arguments[2])
+            return
+        }
         if CommandLine.arguments.contains("--cloud-delivery") {
             try CloudDeliveryTests.run()
             print("CloudDeliveryTests passed")
             return
         }
+        try HistorySourceSnapshotTests.run()
+        try HistoryCollectionTests.run()
+        if let agent = ProcessInfo.processInfo.environment["HISTORY_TEST_AGENT"] { try AgentProcessTests.run(agentPath: agent) }
         try distinguishesTestEvidenceFromCompatibility()
         try validatesHistoryAccessAndSchema()
+        try inspectsAReplacedSafariCursorWithoutChangingIt()
         try acceptsEquivalentSchemaStructures()
         try rejectsInvalidGenerationState()
         try reportsCompatibilityWithoutRequiringTestEvidence()
@@ -79,6 +87,32 @@ struct SafariSyncCoreIntegrationTests {
                     macOSBuild: "build", safariBuild: "safari", historyServiceSHA256: "hash"))
             }
         }
+    }
+
+    static func inspectsAReplacedSafariCursorWithoutChangingIt() throws {
+        let fixture = try HistoryFixture()
+        try fixture.insertSafariVisit(url: "https://cursor-fixture.example/anchor")
+        let store = SafariHistoryStore(databaseURL: fixture.url, ledgerURL: fixture.ledgerURL)
+        let key = Data(repeating: 47, count: 32)
+        let old = try store.arrivalBaseline(authenticationKey: key)
+        let service = AgentService(history: store, stateURL: fixture.stateURL, secret: key)
+        _ = try service.selectProfile("edge:fixture")
+        let stateBefore = try Data(contentsOf: fixture.stateURL)
+        let replaced = SafariArrivalCursor(databaseIdentity: "replaced", visitID: old.visitID, rowAuthenticator: old.rowAuthenticator)
+        try fixture.insertSafariVisit(url: "https://cursor-fixture.example/later")
+        let serviceResult = try service.inspectSafariCursor()
+        try expect(serviceResult?.identityMatches, true, "inspection reads the current stored cursor")
+        try expect(try Data(contentsOf: fixture.stateURL), stateBefore, "inspection does not rewrite sync state")
+        let unchanged = try store.inspectCursor(replaced, authenticationKey: key)
+        try expect(unchanged.identityMatches, false, "different database identity is reported")
+        try expect(unchanged.anchorState, "matches", "matching old anchor is reported without exposing the URL")
+        try expect(unchanged.visitsAfterCursorID, 1, "later current rows are counted")
+        try expect(unchanged.matchedAnchorUnixTime, 1_878_307_200, "matching anchor time is available for investigation")
+        try expect(try fixture.scalarInt("SELECT count(*) FROM history_visits"), 2, "inspection does not change source history")
+        try fixture.exec("UPDATE history_visits SET visit_time=visit_time+1 WHERE id=1")
+        try expect(try store.inspectCursor(replaced, authenticationKey: key).anchorState, "changed", "changed anchor is distinct")
+        try fixture.exec("DELETE FROM history_visits WHERE id=1")
+        try expect(try store.inspectCursor(replaced, authenticationKey: key).anchorState, "missing", "missing anchor is distinct")
     }
 
     static func acceptsEquivalentSchemaStructures() throws {

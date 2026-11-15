@@ -113,8 +113,24 @@ async function pushBrowserPage(state) {
   });
   if (page.type !== "page" || page.events.length === 0) return;
   const events = [];
+  const missing = [];
+  const checked = new Map();
   let pageBytes = 1_024;
   for (const event of page.events) {
+    // Queues survive a stopped Agent. Recheck the native visit before replay so
+    // a deleted visit is not written into Safari after the product restarts.
+    const prefix = `${event.url}\n`;
+    if (typeof event.sourceKey !== "string" || !event.sourceKey.startsWith(prefix)) {
+      // Legacy entries without a native visit identity cannot be safely verified.
+      break;
+    }
+    const visitId = event.sourceKey.slice(prefix.length);
+    if (!visitId) break;
+    if (!checked.has(event.url)) checked.set(event.url, await chrome.history.getVisits({ url: event.url }));
+    if (!checked.get(event.url).some((visit) => String(visit.visitId) === visitId)) {
+      missing.push(event.eventId);
+      continue;
+    }
     const size = new TextEncoder().encode(JSON.stringify(event)).length + 1;
     if (pageBytes + size > 512 * 1024) {
       if (!events.length) throw new Error("History event exceeds native transport limit");
@@ -123,6 +139,8 @@ async function pushBrowserPage(state) {
     events.push(event);
     pageBytes += size;
   }
+  if (missing.length) await controller.discardMissingBrowserVisits(state.profileId, missing);
+  if (!events.length) return;
   const response = await sendNative({
     version: PROTOCOL_VERSION,
     operation: "publish",

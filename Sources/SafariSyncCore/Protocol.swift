@@ -176,6 +176,11 @@ public struct MenuCommand: Codable, Sendable {
     }
 }
 
+public struct SyncPreferenceStatus: Codable, Sendable {
+    public let enabled: Bool
+    public init(enabled: Bool) { self.enabled = enabled }
+}
+
 public struct ProfileSwitchStatus: Codable, Sendable {
     public let state: String
     public let profileID: String

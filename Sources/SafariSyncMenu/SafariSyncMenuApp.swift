@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import SafariSyncCore
 import ServiceManagement
 
@@ -16,6 +17,8 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var latestHealth: HealthSnapshot?
     private var cloudWindow: CloudDiagnosticsWindow?
     private var statusWindow: SyncStatusWindow?
+    private var viewerProcess: Process?
+    private var viewerLifetime: FileHandle?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -24,26 +27,25 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem = item
 
         let setupState = setupCoordinator.inspect()
-        if !setupState.legacyArtifacts.isEmpty {
-            stopAgent()
-            showLegacyBlock(setupState.legacyArtifacts)
-        } else if setupState.selectedBrowsers.isEmpty {
-            showSetup()
-        } else {
-            Task {
-                let health = try? await requestHealth()
-                let expectedBuild = expectedAgentBuild()
-                let runningAtExpectedPath = NSRunningApplication
-                    .runningApplications(withBundleIdentifier: agentBundleIdentifier)
-                    .allSatisfy { $0.bundleURL?.standardizedFileURL == agentURL().standardizedFileURL }
-                let needsRestart = health == nil
-                    || health?.agentBuild != expectedBuild
-                    || health?.protocolVersion != safariSyncProtocolVersion
-                    || !runningAtExpectedPath
-                try? await launchAgent(forceRestart: needsRestart)
-                await refreshStatusAsync()
+        if !setupState.legacyArtifacts.isEmpty { showLegacyBlock(setupState.legacyArtifacts) }
+        Task {
+            // Any previous Agent belonged to an earlier Menu process. Restart it
+            // so the new Menu's ownership token governs its entire lifetime.
+            try? await launchAgent(forceRestart: true)
+            if UserDefaults.standard.bool(forKey: "viewerEnabled") {
+                do { try await startViewer() }
+                catch { showMessage(title: "Web Viewer Unavailable", detail: "Check the viewer settings and whether local port 8766 is already in use.") }
             }
+            await refreshStatusAsync()
         }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        if let viewer = stopViewer() {
+            for _ in 0..<20 where viewer.isRunning { usleep(100_000) }
+            if viewer.isRunning { kill(viewer.processIdentifier, SIGKILL) }
+        }
+        stopAgent()
     }
 
     func makeMenu() -> NSMenu {
@@ -55,6 +57,11 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(profileItem)
         menu.addItem(withTitle: "Configure Safari Sync Assist…", action: #selector(configureSafariAssist), keyEquivalent: "")
         menu.addItem(.separator())
+        menu.addItem(withTitle: "Configure History Collection…", action: #selector(configureCollection), keyEquivalent: "")
+        menu.addItem(withTitle: "Collect History Now", action: #selector(collectNow), keyEquivalent: "")
+        menu.addItem(withTitle: "Configure Web Viewer…", action: #selector(configureViewer), keyEquivalent: "")
+        menu.addItem(withTitle: "Open History on the Web", action: #selector(openWeb), keyEquivalent: "")
+        menu.addItem(withTitle: "Turn Sync On or Off…", action: #selector(toggleSync), keyEquivalent: "")
         menu.addItem(withTitle: "Set Up Extensions & Login…", action: #selector(showSetup), keyEquivalent: "")
         let troubleshooting = NSMenu()
         troubleshooting.addItem(compatibilityItem)
@@ -65,7 +72,7 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(troubleshootingItem)
         menu.addItem(withTitle: "Refresh Status", action: #selector(refreshStatus), keyEquivalent: "r")
         menu.addItem(.separator())
-        let quit = menu.addItem(withTitle: "Quit Menu (Sync Continues)", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        let quit = menu.addItem(withTitle: "Quit History Sync", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         for item in menu.items + troubleshooting.items where item.action != nil { item.target = self }
         quit.target = NSApp
         menu.items.first(where: { $0.action == #selector(showSyncStatus) })?.toolTip = "View sync status without adding history or changing settings."
@@ -88,7 +95,6 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func showSetup() {
         let inspected = setupCoordinator.inspect()
         if !inspected.legacyArtifacts.isEmpty {
-            stopAgent()
             showLegacyBlock(inspected.legacyArtifacts)
             return
         }
@@ -162,16 +168,8 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func registerLoginItemIfNeeded() throws {
         let loginItem = SMAppService.mainApp
-        switch loginItem.status {
-        case .notRegistered:
-            try loginItem.register()
-            if loginItem.status == .requiresApproval { showLoginItemApproval() }
-        case .requiresApproval:
+        if try LoginItemRegistration.ensure(status: { loginItem.status }, register: { try loginItem.register() }) == .requiresApproval {
             showLoginItemApproval()
-        case .enabled, .notFound:
-            break
-        @unknown default:
-            break
         }
     }
 
@@ -212,6 +210,7 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = false
         configuration.addsToRecentItems = false
+        configuration.arguments = ["--menu-pid", "\(ProcessInfo.processInfo.processIdentifier)"]
         try await NSWorkspace.shared.openApplication(at: agentURL, configuration: configuration)
     }
 
@@ -525,22 +524,168 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    private func stopAgent() {
-        for application in NSRunningApplication.runningApplications(
-            withBundleIdentifier: agentBundleIdentifier
-        ) {
-            application.terminate()
+    @objc private func configureCollection() {
+        Task {
+            do {
+                let data = try await requestAsync(MenuCommand(operation: "collectionStatus"))
+                if let error = try? JSONDecoder().decode(TypedError.self, from: data), error.type == "error" { throw error }
+                let reply = try JSONDecoder().decode(CollectionReply.self, from: data)
+                let candidateData = try await requestAsync(MenuCommand(operation: "collectionCandidates"))
+                if let error = try? JSONDecoder().decode(TypedError.self, from: candidateData), error.type == "error" { throw error }
+                let discovery = try JSONDecoder().decode(CollectionCandidates.self, from: candidateData)
+                let candidates = discovery.candidates
+                let selected = Set(reply.sources.map(\.id))
+                let alert = NSAlert()
+                alert.messageText = "History Collection"
+                alert.informativeText = "Choose the browsers and profiles to keep in the history viewer. Removing a source removes its collected records. Pausing collection keeps them."
+                if !discovery.unavailableBrowsers.isEmpty {
+                    alert.informativeText += "\n\nCould not read profiles for \(discovery.unavailableBrowsers.joined(separator: ", ")). Check Full Disk Access for the Agent."
+                }
+                alert.addButton(withTitle: "Save")
+                alert.addButton(withTitle: "Cancel")
+                let stack = NSStackView(); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 5
+                let enabled = NSButton(checkboxWithTitle: "Collect history", target: nil, action: nil)
+                enabled.state = reply.enabled ? .on : .off; stack.addArrangedSubview(enabled)
+                var controls: [(HistoryCollectionSource, NSButton)] = []
+                for candidate in candidates {
+                    let status = reply.statuses.first { $0.id == candidate.id }
+                    let state = status.map { item in
+                        let last = item.lastSuccess.map { Date(timeIntervalSince1970: $0).formatted(date: .abbreviated, time: .shortened) } ?? "never"
+                        return " — \(item.state), \(item.count) saved, last success: \(last)"
+                    } ?? ""
+                    let button = NSButton(checkboxWithTitle: "\(candidate.browserType) · \(candidate.profileName)\(state)", target: nil, action: nil)
+                    button.state = selected.contains(candidate.id) ? .on : .off
+                    stack.addArrangedSubview(button); controls.append((candidate, button))
+                }
+                stack.frame = NSRect(x: 0, y: 0, width: 440, height: max(54, CGFloat(candidates.count + 1) * 27))
+                let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 455, height: min(350, stack.frame.height)))
+                scroll.hasVerticalScroller = true; scroll.documentView = stack; alert.accessoryView = scroll
+                guard alert.runModal() == .alertFirstButtonReturn else { return }
+                let chosen = controls.filter { $0.1.state == .on }.map(\.0)
+                let shouldCollect = enabled.state == .on
+                let json = String(decoding: try JSONEncoder().encode(chosen), as: UTF8.self)
+                try await checkCommand(MenuCommand(operation: "setCollectionSources", snapshotJSON: json))
+                try await checkCommand(MenuCommand(operation: "setCollectionEnabled", result: shouldCollect ? "enable" : "disable"))
+                try registerLoginItemIfNeeded()
+            } catch { NSAlert(error: error).runModal() }
         }
+    }
+
+    private func checkCommand(_ command: MenuCommand) async throws {
+        let data = try await requestAsync(command)
+        if let error = try? JSONDecoder().decode(TypedError.self, from: data), error.type == "error" { throw error }
+    }
+
+    @objc private func collectNow() {
+        Task {
+            do { try await checkCommand(MenuCommand(operation: "collectNow")); showMessage(title: "Collection Started", detail: "Selected sources will be checked in the background.") }
+            catch { NSAlert(error: error).runModal() }
+        }
+    }
+
+    @objc private func toggleSync() {
+        Task {
+            do {
+                let data = try await requestAsync(MenuCommand(operation: "syncPreference"))
+                if let error = try? JSONDecoder().decode(TypedError.self, from: data), error.type == "error" { throw error }
+                let enabled = try JSONDecoder().decode(SyncPreferenceStatus.self, from: data).enabled
+                let alert = NSAlert(); alert.messageText = enabled ? "Turn Off Browser Sync?" : "Turn On Browser Sync?"
+                alert.informativeText = "History collection and Web viewing have separate settings. Pending sync work is retained."
+                alert.addButton(withTitle: enabled ? "Turn Off" : "Turn On"); alert.addButton(withTitle: "Cancel")
+                guard alert.runModal() == .alertFirstButtonReturn else { return }
+                try await checkCommand(MenuCommand(operation: "setSyncEnabled", result: enabled ? "disable" : "enable"))
+                await refreshStatusAsync()
+            } catch { NSAlert(error: error).runModal() }
+        }
+    }
+
+    @objc private func configureViewer() {
+        let defaults = UserDefaults.standard
+        let alert = NSAlert(); alert.messageText = "Web Viewer"
+        alert.informativeText = "Enter your Tailscale login and the HTTPS URL served by Tailscale Serve. Only requests from this login are accepted. Configure Serve separately before opening the viewer."
+        alert.addButton(withTitle: "Save"); alert.addButton(withTitle: "Cancel")
+        let stack = NSStackView(); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 8
+        let enabled = NSButton(checkboxWithTitle: "Enable Web viewer", target: nil, action: nil)
+        enabled.state = defaults.bool(forKey: "viewerEnabled") ? .on : .off
+        let owner = NSTextField(string: defaults.string(forKey: "viewerOwner") ?? ""); owner.placeholderString = "Tailscale login"
+        let origin = NSTextField(string: defaults.string(forKey: "viewerOrigin") ?? ""); origin.placeholderString = "https://your-device.tailnet.ts.net/"
+        owner.widthAnchor.constraint(equalToConstant: 420).isActive = true; origin.widthAnchor.constraint(equalToConstant: 420).isActive = true
+        stack.addArrangedSubview(enabled); stack.addArrangedSubview(owner); stack.addArrangedSubview(origin)
+        stack.frame = NSRect(x: 0, y: 0, width: 430, height: 100); alert.accessoryView = stack
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let login = owner.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let address = origin.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let shouldEnable = enabled.state == .on
+        if shouldEnable {
+            guard !login.isEmpty, let url = URL(string: address), url.scheme?.lowercased() == "https", url.host != nil,
+                  url.user == nil, url.password == nil, url.fragment == nil, url.query == nil,
+                  (url.path.isEmpty || url.path == "/") else {
+                showMessage(title: "Viewer Settings Incomplete", detail: "Enter a Tailscale login and an HTTPS URL."); return
+            }
+        }
+        Task {
+            do {
+                if shouldEnable {
+                    try await checkCommand(MenuCommand(operation: "setViewerOrigin", snapshotJSON: address))
+                    defaults.set(login, forKey: "viewerOwner"); defaults.set(address, forKey: "viewerOrigin")
+                }
+                defaults.set(shouldEnable, forKey: "viewerEnabled")
+                let previous = stopViewer()
+                if let previous {
+                    for _ in 0..<30 where previous.isRunning { try await Task.sleep(for: .milliseconds(100)) }
+                }
+                if shouldEnable { try await startViewer() }
+                try registerLoginItemIfNeeded()
+            } catch { NSAlert(error: error).runModal() }
+        }
+    }
+
+    @objc private func openWeb() {
+        guard UserDefaults.standard.bool(forKey: "viewerEnabled"),
+              let address = UserDefaults.standard.string(forKey: "viewerOrigin"), let url = URL(string: address) else {
+            showMessage(title: "Web Viewer Is Off", detail: "Configure and enable the Web viewer first."); return
+        }
+        NSWorkspace.shared.open(url)
+    }
+
+    private func startViewer() async throws {
+        let defaults = UserDefaults.standard
+        guard let owner = defaults.string(forKey: "viewerOwner"), !owner.isEmpty,
+              defaults.string(forKey: "viewerOrigin") != nil else { throw TypedError(code: "VIEWER_NOT_CONFIGURED") }
+        if viewerProcess?.isRunning == true { return }
+        let bundle = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/Safari Chromium History Sync Viewer.app")
+        let executable = bundle.appendingPathComponent("Contents/MacOS/SafariSyncViewer")
+        guard FileManager.default.isExecutableFile(atPath: executable.path) else { throw TypedError(code: "VIEWER_MISSING") }
+        let db = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/\(ProductIdentity.applicationSupportDirectoryName)/Viewing/history.sqlite")
+        let process = Process(); process.executableURL = executable
+        process.arguments = ["--database", db.path, "--assets", bundle.appendingPathComponent("Contents/Resources/Web").path, "--owner", owner, "--port", "8766", "--owned-stdin"]
+        let lifetime = Pipe(); process.standardInput = lifetime
+        process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.nullDevice
+        try process.run()
+        try lifetime.fileHandleForReading.close()
+        viewerLifetime = lifetime.fileHandleForWriting; viewerProcess = process
+        try await Task.sleep(for: .milliseconds(250))
+        guard process.isRunning else { viewerProcess = nil; throw TypedError(code: "VIEWER_START_FAILED") }
+    }
+
+    @discardableResult private func stopViewer() -> Process? {
+        let previous = viewerProcess
+        try? viewerLifetime?.close(); viewerLifetime = nil
+        if previous?.isRunning == true { previous?.terminate() }
+        viewerProcess = nil
+        return previous
+    }
+
+    private func stopAgent() {
+        let applications = NSRunningApplication.runningApplications(withBundleIdentifier: agentBundleIdentifier)
+        for application in applications { application.terminate() }
+        for _ in 0..<20 where applications.contains(where: { !$0.isTerminated }) { usleep(100_000) }
+        for application in applications where !application.isTerminated { application.forceTerminate() }
     }
 
     private func agentURL() -> URL {
         Bundle.main.bundleURL.deletingLastPathComponent()
             .appendingPathComponent(ProductIdentity.agentBundleName, isDirectory: true)
-    }
-
-    private func expectedAgentBuild() -> String? {
-        let info = NSDictionary(contentsOf: agentURL().appendingPathComponent("Contents/Info.plist"))
-        return info?["CFBundleVersion"] as? String
     }
 
     private func showMessage(title: String, detail: String) {

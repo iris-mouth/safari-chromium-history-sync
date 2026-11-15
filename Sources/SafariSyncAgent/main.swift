@@ -14,6 +14,9 @@ private final class AgentRuntime: @unchecked Sendable {
     private var runtimeState = "initializing"
     private var issueCode: String?
     private var cloudTrigger: DispatchSourceTimer?
+    private var collector: HistoryCollector?
+    private var collectionTimer: DispatchSourceTimer?
+    private let collectionQueue = DispatchQueue(label: "io.github.irismouth.history-sync.collection", qos: .utility)
 
     init(runtimeDirectory: URL, historyURL: URL, agentBuild: String?) {
         self.runtimeDirectory = runtimeDirectory
@@ -22,6 +25,7 @@ private final class AgentRuntime: @unchecked Sendable {
     }
 
     func initialize() {
+        initializeCollector()
         guard LegacyWriterDetector.detect().isEmpty else {
             block("legacyWriterDetected")
             return
@@ -35,18 +39,38 @@ private final class AgentRuntime: @unchecked Sendable {
         }
 
         let stateSecret: Data
-        do {
-            stateSecret = try KeychainRootSecret.load(createIfMissing: true)
-        } catch {
-            block(AgentIssueCode.keychainUnavailable)
-            return
+        #if DEBUG
+        // Only isolated debug fixtures may bypass Keychain; release builds do
+        // not contain this path and always use the existing Keychain boundary.
+        let temporaryRoot = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().path + "/"
+        let testSecret = ProcessInfo.processInfo.environment["SAFARI_SYNC_SYNTHETIC_TEST"] == "1"
+            && runtimeDirectory.resolvingSymlinksInPath().path.hasPrefix(temporaryRoot)
+            && historyURL.resolvingSymlinksInPath().path.hasPrefix(temporaryRoot)
+        if testSecret { stateSecret = Data(repeating: 73, count: 32) }
+        else {
+            do { stateSecret = try KeychainRootSecret.load(createIfMissing: true) }
+            catch { block(AgentIssueCode.keychainUnavailable); return }
         }
+        #else
+        do { stateSecret = try KeychainRootSecret.load(createIfMissing: true) }
+        catch { block(AgentIssueCode.keychainUnavailable); return }
+        #endif
 
         let history = SafariHistoryStore(
             databaseURL: historyURL,
             ledgerURL: runtimeDirectory.appendingPathComponent("delivery-ledger.sqlite"),
             schema: .historyV1
         )
+        let readyService = AgentService(
+            history: history,
+            stateURL: runtimeDirectory.appendingPathComponent("state.sealed"),
+            secret: stateSecret,
+            agentBuild: agentBuild,
+            compatibility: compatibility
+        )
+        // Keep the encrypted sync preference adjustable even if Safari access
+        // is currently blocked; browser exchange still requires ready state.
+        lock.withLock { service = readyService; self.history = history }
         do {
             try history.validateAccessAndSchema()
         } catch SafariHistoryError.incompatibleSchema {
@@ -57,13 +81,6 @@ private final class AgentRuntime: @unchecked Sendable {
             return
         }
 
-        let readyService = AgentService(
-            history: history,
-            stateURL: runtimeDirectory.appendingPathComponent("state.sealed"),
-            secret: stateSecret,
-            agentBuild: agentBuild,
-            compatibility: compatibility
-        )
         let timer = makeCloudTrigger(service: readyService)
         let initialHealth = try? readyService.status()
         lock.withLock {
@@ -76,6 +93,76 @@ private final class AgentRuntime: @unchecked Sendable {
             cloudTrigger = timer
         }
         timer.resume()
+    }
+
+    private struct CollectionReply: Codable {
+        let enabled: Bool
+        let sources: [HistoryCollectionSource]
+        let statuses: [HistoryCollectionStatus]
+    }
+
+    private func initializeCollector() {
+        do {
+            let instance = try HistoryCollector(databaseURL: runtimeDirectory.appendingPathComponent("Viewing/history.sqlite"))
+            let timer = DispatchSource.makeTimerSource(queue: collectionQueue)
+            timer.schedule(deadline: .now() + 1, repeating: 30, leeway: .seconds(1))
+            timer.setEventHandler {
+                if (try? instance.isEnabled()) == true { try? instance.collectAll() }
+            }
+            lock.withLock { collector = instance; collectionTimer = timer }
+            timer.resume()
+        } catch {
+            // Sync remains independent; collection commands report unavailable.
+        }
+    }
+
+    func collectionCommand(_ command: MenuCommand) throws -> Data {
+        guard let collector = lock.withLock({ self.collector }) else { throw TypedError(code: "COLLECTION_UNAVAILABLE", retryable: true) }
+        switch command.operation {
+        case "collectionStatus": break
+        case "collectionCandidates":
+            var home = FileManager.default.homeDirectoryForCurrentUser
+            #if DEBUG
+            // Process tests use an isolated synthetic home, never real profiles.
+            let temporaryRoot = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().path + "/"
+            if ProcessInfo.processInfo.environment["SAFARI_SYNC_SYNTHETIC_TEST"] == "1",
+               runtimeDirectory.resolvingSymlinksInPath().path.hasPrefix(temporaryRoot),
+               historyURL.resolvingSymlinksInPath().path.hasPrefix(temporaryRoot) {
+                home = runtimeDirectory
+            }
+            #endif
+            return try JSONEncoder().encode(CollectionProfiles.discover(home: home, selected: collector.sources()))
+        case "setCollectionSources":
+            guard let json = command.snapshotJSON, let data = json.data(using: .utf8) else { throw TypedError(code: "INVALID_MESSAGE") }
+            let sources = try JSONDecoder().decode([HistoryCollectionSource].self, from: data)
+            try collector.configure(sources)
+        case "setCollectionEnabled":
+            guard let result = command.result, ["enable", "disable"].contains(result) else { throw TypedError(code: "INVALID_MESSAGE") }
+            try collector.setEnabled(result == "enable")
+        case "setViewerOrigin":
+            try collector.setViewerOrigin(command.snapshotJSON)
+        case "collectNow":
+            collectionQueue.async { try? collector.collectAll() }
+            return Data("{\"accepted\":true}".utf8)
+        default: throw TypedError(code: "INVALID_OPERATION")
+        }
+        return try JSONEncoder().encode(CollectionReply(enabled: collector.isEnabled(), sources: collector.sources(), statuses: collector.statuses()))
+    }
+
+    func syncPreference() throws -> SyncPreferenceStatus {
+        guard let service = lock.withLock({ self.service }) else { throw TypedError(code: "AGENT_INITIALIZING", retryable: true) }
+        return SyncPreferenceStatus(enabled: try service.status().enabled)
+    }
+
+    func inspectSafariCursor() throws -> SafariCursorInspection? {
+        guard let service = lock.withLock({ self.service }) else { throw TypedError(code: "AGENT_INITIALIZING", retryable: true) }
+        return try service.inspectSafariCursor()
+    }
+
+    func setSyncEnabled(_ enabled: Bool) throws -> HealthSnapshot {
+        guard let service = lock.withLock({ self.service }) else { throw TypedError(code: "AGENT_INITIALIZING", retryable: true) }
+        try service.setSyncEnabled(enabled)
+        return try service.status()
     }
 
     func health() throws -> HealthSnapshot {
@@ -271,6 +358,26 @@ if CommandLine.arguments.contains("--validate-safari-assist-script") {
     exit(SafariSyncAssistDriver.validate() ? 0 : 1)
 }
 
+// A Menu-owned Agent cannot outlive a quit, crash, or delayed app launch.
+// Debug fixtures may omit this argument; packaged builds always require it.
+let ownerIndex = CommandLine.arguments.firstIndex(of: "--menu-pid")
+let ownerPID: Int32? = ownerIndex.flatMap { index in
+    guard index + 1 < CommandLine.arguments.count, let value = Int32(CommandLine.arguments[index + 1]), value > 1, value != getpid() else { return nil }
+    return value
+}
+#if !DEBUG
+guard ownerPID != nil else { exit(64) }
+#endif
+var ownerTimer: DispatchSourceTimer?
+if let ownerPID {
+    guard kill(ownerPID, 0) == 0 else { exit(0) }
+    let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+    timer.schedule(deadline: .now() + 1, repeating: 1)
+    timer.setEventHandler { if kill(ownerPID, 0) != 0 { exit(0) } }
+    timer.resume()
+    ownerTimer = timer
+}
+
 let logger = Logger(subsystem: ProductIdentity.agentBundleIdentifier, category: "requests")
 let environment = ProcessInfo.processInfo.environment
 let home = FileManager.default.homeDirectoryForCurrentUser
@@ -338,6 +445,14 @@ do {
                         let command = try JSONDecoder().decode(MenuCommand.self, from: request.body)
                         if command.operation == "status" {
                             response = try JSONEncoder().encode(runtime.health())
+                        } else if command.operation == "inspectSafariCursor" {
+                            response = try JSONEncoder().encode(runtime.inspectSafariCursor())
+                        } else if ["collectionStatus", "collectionCandidates", "setCollectionSources", "setCollectionEnabled", "collectNow", "setViewerOrigin"].contains(command.operation) {
+                            response = try runtime.collectionCommand(command)
+                        } else if command.operation == "syncPreference" {
+                            response = try JSONEncoder().encode(runtime.syncPreference())
+                        } else if command.operation == "setSyncEnabled", let value = command.result, ["enable", "disable"].contains(value) {
+                            response = try JSONEncoder().encode(runtime.setSyncEnabled(value == "enable"))
                         } else if command.operation == "selectProfile", let profileID = command.profileID {
                             response = try JSONEncoder().encode(ProfileSwitchStatus(
                                 state: runtime.selectProfile(profileID),

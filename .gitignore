@@ -34,3 +34,9 @@ dist/
 # Local native messaging manifests if copied into the repo.
 com.local.safari_bookmark_sync.json
 io.github.irismouth.safari_chromium_history_sync.json
+
+# Web build and browser test artifacts.
+/web/node_modules/
+/web/dist/
+/web/test-results/
+/web/playwright-report/

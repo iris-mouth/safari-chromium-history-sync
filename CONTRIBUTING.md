@@ -5,10 +5,12 @@ Contributions should keep the project local, inspectable, and reversible.
 ## Build
 
 Source builds require Apple command-line build tools and Node.js for the tests.
-Python and Node.js are not runtime dependencies. Run checks before packaging or
+Python and Node.js are not runtime dependencies. Node.js is also used to build
+the React assets; Python is used only to create synthetic development fixtures. Run checks before packaging or
 opening a PR:
 
 ```sh
+npm --prefix web ci
 ./scripts/check.sh
 ./scripts/package-app.sh
 ```
@@ -57,3 +59,29 @@ Include:
 Avoid committing sealed state, delivery ledgers, Safari databases, browser profile files, or screenshots that reveal private URLs.
 
 When changing setup behavior, verify Chrome-only, Edge-only, and both-browser selections. An unselected browser must not gain a Native Messaging directory or manifest. Use the app's **Set Up Extensions & Login…** screen for installation checks rather than introducing a second shell implementation.
+
+## Integrated viewer validation
+
+The Swift integration executable uses synthetic browser databases and exercises
+the Collector, Reader, and (where loopback sockets are permitted) HTTP boundary.
+The browser tests require a built Viewer and Web assets, and bind only to
+`127.0.0.1:18766`:
+
+```sh
+swift build --product SafariSyncViewer
+npm --prefix web run build
+npm --prefix web test
+```
+
+The tests use synthetic data under the temporary directory. A sandbox that
+forbids loopback sockets must grant the test process local bind permission for
+the HTTP and Playwright checks. Do not point the test server at live history.
+
+The opt-in process-lifetime tests must be run only while the installed Agent is
+stopped. They start a debug Agent with an isolated temporary state directory,
+synthetic history and a test-only secret; release builds cannot use that secret.
+Build both executables first and provide their absolute paths as
+`HISTORY_TEST_AGENT` and `HISTORY_TEST_VIEWER` when running
+`SafariSyncCoreIntegrationTests`. The test also needs permission to bind a
+loopback socket. It exercises interrupted collection, restart, owner death and
+Viewer pipe closure without starting the installed app.

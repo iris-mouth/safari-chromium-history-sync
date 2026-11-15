@@ -1,5 +1,11 @@
 # Compatibility policy
 
+## Development build 620
+
+Build 620 adds independent collection and a separate Viewer. It is under
+validation and does not inherit end-to-end evidence from build 614 or earlier;
+`testedRuntimes` remains empty. See [integration status](INTEGRATION-IMPLEMENTATION-STATUS.md).
+
 ## Development build 614
 
 Build 614 restores English menu and dialog text without changing the sync engine. Its [validation record](validation/build-614-english-ui.md) separates local checks from receiving-device arrival evidence. It retains the compatible-unverified label and an empty `testedRuntimes` list.

@@ -102,6 +102,9 @@ public final class AgentService: @unchecked Sendable {
             observe(message)
             var state = try persistence.load() ?? State()
 
+            if !state.enabled && ["publish", "pull"].contains(message.operation) {
+                return try encode(.failure(TypedError(code: "SYNC_PAUSED", retryable: true)))
+            }
             guard message.profileID == state.activeProfileID else {
                 return try encode(.failure(TypedError(code: "PROFILE_NOT_ACTIVE", retryable: true)))
             }
@@ -313,6 +316,22 @@ public final class AgentService: @unchecked Sendable {
             default:
                 return try encode(.failure(TypedError(code: "INVALID_OPERATION")))
             }
+        }
+    }
+
+    public func setSyncEnabled(_ enabled: Bool) throws {
+        try lock.withLock {
+            var state = try persistence.load() ?? State()
+            state.enabled = enabled
+            try persist(state)
+        }
+    }
+
+    /// Reads only aggregate cursor evidence. It never changes stored sync state.
+    public func inspectSafariCursor() throws -> SafariCursorInspection? {
+        try lock.withLock {
+            guard let cursor = try persistence.load()?.cursor else { return nil }
+            return try history.inspectCursor(cursor, authenticationKey: authenticationKey)
         }
     }
 
