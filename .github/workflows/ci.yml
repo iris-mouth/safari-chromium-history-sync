@@ -17,6 +17,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: false
       - run: scripts/check.sh
       - run: swift build --disable-sandbox
       - run: npm ci && npm run build
