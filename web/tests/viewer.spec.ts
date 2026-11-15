@@ -429,3 +429,29 @@ test("changing language preserves the current view and restores focus after deta
   await page.reload();
   await expect(page.getByLabel("Language")).toHaveValue("en");
 });
+
+test("狭い画面でも日付と表示が横一列に収まり選択した日付が見える", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+  const start = page.getByLabel("開始日");
+  const end = page.getByLabel("終了日");
+  const submit = page.getByRole("button", { name: "表示", exact: true });
+  for (const [width, font] of [[390, 16], [320, 16], [390, 22]] as const) {
+    await page.setViewportSize({ width, height: 844 });
+    await page.evaluate(size => { document.documentElement.style.fontSize = size + "px"; }, font);
+    const a = (await start.boundingBox())!;
+    const b = (await end.boundingBox())!;
+    const button = (await submit.boundingBox())!;
+    expect(b.x).toBeGreaterThanOrEqual(a.x + a.width);
+    expect(b.x + b.width).toBeLessThanOrEqual(width);
+    expect(button.x).toBeGreaterThanOrEqual(b.x + b.width);
+    // With enlarged text the button can grow taller. Its center must stay in the date row.
+    expect(button.y + button.height / 2).toBeGreaterThan(a.y);
+    expect(button.y + button.height / 2).toBeLessThan(a.y + a.height);
+    const clipped = await page.locator(".compact-date").evaluateAll(nodes => nodes.some(node => node.scrollWidth > node.clientWidth));
+    expect(clipped).toBe(false);
+    expect(button.x + button.width).toBeLessThanOrEqual(width);
+  }
+  await showDay(page, "2026-11-10");
+  await expect(page.locator(".compact-date").first()).toHaveText("2026/11/10");
+});

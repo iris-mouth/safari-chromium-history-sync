@@ -3,6 +3,20 @@ import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./style.css";
 
+function DateField({ label, name, initial }: { label: string; name: string; initial: string }) {
+  const [value, setValue] = useState(initial);
+  return (
+    <label>
+      {label}
+      <span className="date-control">
+        <span className="compact-date" aria-hidden="true">{value.replaceAll("-", "/") || "—"}</span>
+        <input type="date" aria-label={label} name={name} value={value}
+          onChange={event => setValue(event.currentTarget.value)} required />
+      </span>
+    </label>
+  );
+}
+
 type Row = {
   id: number;
   title: string;
@@ -533,27 +547,8 @@ function App() {
             key={view.start + view.end}
           >
             <div className="date-fields">
-              <label>
-                {t("開始日")}
-                <input
-                  aria-label={t("開始日")}
-                  type="date"
-                  name="start"
-                  defaultValue={view.start}
-                  required
-                />
-              </label>
-              <span>—</span>
-              <label>
-                {t("終了日")}
-                <input
-                  aria-label={t("終了日")}
-                  type="date"
-                  name="end"
-                  defaultValue={view.end}
-                  required
-                />
-              </label>
+              <DateField label={t("開始日")} name="start" initial={view.start} />
+              <DateField label={t("終了日")} name="end" initial={view.end} />
               <button type="submit">{t("表示")}</button>
             </div>
           </form>

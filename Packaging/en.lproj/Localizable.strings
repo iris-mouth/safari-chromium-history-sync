@@ -241,3 +241,6 @@
 "Extension connected" = "Extension connected";
 "Select a profile in History Collection." = "Select a profile in History Collection.";
 "Reload the bundled extension in the selected profile." = "Reload the bundled extension in the selected profile.";
+"Turn on history collection to enable sync." = "Turn on history collection to enable sync.";
+"Sync assist opens example.com in Safari and adds a visit that can sync to other devices." = "Sync assist opens example.com in Safari and adds a visit that can sync to other devices.";
+"Register and open extension pages" = "Register and open extension pages";

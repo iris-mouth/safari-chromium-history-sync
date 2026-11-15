@@ -27,9 +27,8 @@ notarization. See the [release notes](docs/RELEASE-v6.1.4.md) before installing.
 ## Install
 
 1. Install the PKG. It places the app and its Agent in `/Applications`.
-2. Open **Safari Chromium History Sync**, then choose **Settings… → General → Set Up Extensions & Login…
-   → Start Setup**.
-3. Select Chrome Stable, Edge Stable, or both.
+2. Open **Safari Chromium History Sync**, then open **Settings… → General**.
+3. Select Chrome Stable, Edge Stable, or both, then click **Register and open extension pages**.
 4. Setup opens each selected browser's extensions page and reveals the bundled
    `ChromiumExtension` folder. Enable **Developer mode**, choose **Load unpacked**,
    and select that folder.
@@ -45,11 +44,10 @@ permissions. Stop the legacy Python writer before using version 6.
 
 - **View Status** shows history collection, the Web Viewer, and browser sync. **Open History** opens the configured Viewer.
 - **Collect Now** refreshes the two selected sources. **Settings… → History Collection** changes the Chromium profile.
-- **Configure Safari Sync Assist…** enables automatic help for pending Safari
+- **Settings… → Browser Sync → Enable automatic sync assist in a dedicated tab** enables automatic help for pending Safari
   sync using a dedicated tab. This requires Safari Automation permission and
   creates real browsing history for the helper page.
-- **Settings… → General** contains compatibility checks, recovery options, and
-  detailed diagnostics.
+- **Settings… → General** shows compatibility and offers recovery when an issue is detected. Detailed diagnostics are in **Browser Sync**.
 
 For history to reach your iPhone or iPad, enable the browser's built-in history
 sync and use the matching account on each device. Arrival can take time; check

@@ -241,3 +241,6 @@
 "Extension connected" = "拡張は接続済み";
 "Select a profile in History Collection." = "「履歴収集」でプロファイルを選んでください。";
 "Reload the bundled extension in the selected profile." = "選択したプロファイルで同梱の拡張機能を再読み込みしてください。";
+"Turn on history collection to enable sync." = "同期するには履歴収集をオンにしてください。";
+"Sync assist opens example.com in Safari and adds a visit that can sync to other devices." = "同期補助は Safari で example.com を開きます。この訪問は履歴に追加され、他の端末にも同期される場合があります。";
+"Register and open extension pages" = "登録してブラウザの拡張機能ページを開く";
