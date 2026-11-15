@@ -13,6 +13,7 @@ const DEFAULT_STATE = Object.freeze({
   nextSafariToBrowserSequence: 1,
   browserToSafari: [],
   safariToBrowser: [],
+  heldBrowserVisits: [],
   seenBrowserEventIds: [],
   seenBrowserSourceKeys: [],
   recoveryCount: 0,
@@ -43,6 +44,7 @@ function initialState(raw) {
         profileId: event.profileId ?? legacyProfileId,
       }))
       : [],
+    heldBrowserVisits: Array.isArray(raw.heldBrowserVisits) ? raw.heldBrowserVisits : [],
     safariToBrowser: Array.isArray(raw.safariToBrowser)
       ? raw.safariToBrowser.map((event) => ({
         ...event,
@@ -206,5 +208,21 @@ export function createSyncController({ store }) {
     });
   }
 
-  return { browserExchange, status, discardMissingBrowserVisits };
+  async function holdUnverifiable(profileId, ids) {
+    const keys = new Set(ids);
+    return transact((state) => {
+      state.browserToSafari = state.browserToSafari.filter(event => {
+        if (event.profileId !== profileId || !keys.has(event.eventId)) return true;
+        state.heldBrowserVisits.push(event);
+        return false;
+      });
+    });
+  }
+
+  async function heldCount(profileId) {
+    await serial;
+    return initialState(await store.load()).heldBrowserVisits.filter(event => event.profileId === profileId).length;
+  }
+
+  return { browserExchange, status, discardMissingBrowserVisits, holdUnverifiable, heldCount };
 }

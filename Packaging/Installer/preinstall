@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+# Older receipts include a sibling Agent. Leave unrelated or changed apps alone.
+old="$3/Applications/Safari Chromium History Sync Agent.app"
+[ -e "$old" ] || exit 0
+[ ! -L "$old" ] || exit 1
+id=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$old/Contents/Info.plist")
+[ "$id" = io.github.irismouth.safari-chromium-history-sync.agent ] || exit 1
+pkgutil --files io.github.irismouth.safari-chromium-history-sync.pkg | grep -Fxq 'Applications/Safari Chromium History Sync Agent.app/Contents/MacOS/SafariSyncAgent' || exit 1
+codesign --verify --strict "$old"

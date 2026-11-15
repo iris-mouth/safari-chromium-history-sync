@@ -14,7 +14,7 @@ Do not attach those files publicly unless you have scrubbed them.
 
 ## Design Constraints
 
-- Only `/Applications/Safari Chromium History Sync Agent.app` receives Full Disk Access; its `SafariSyncAgent` executable writes Safari's history database.
+- Only `/Applications/Safari Chromium History Sync.app/Contents/Helpers/Safari Chromium History Sync Agent.app` receives Full Disk Access; its `SafariSyncAgent` executable writes Safari's history database.
 - The no-FDA Bridge and Menu authenticate to the Agent over a mode-`0600` Unix socket using a random owner-only mode-`0600` IPC key.
 - Sensitive Agent state is sealed with AES-GCM using an Agent-only Keychain root secret; Bridge and Menu never access Keychain.
 - Safari history sync is intentionally narrow and insert-only.
@@ -25,3 +25,5 @@ Do not attach those files publicly unless you have scrubbed them.
 ## Reporting
 
 Open a GitHub issue with a minimal reproduction that avoids private URLs when possible. If a private sample is required, describe the shape of the data instead of posting the raw file.
+
+The Viewer gateway terminates TLS for the configured hostname and requires a matching Tailscale user. Before trusting the forwarded address it checks the kernel-reported sender of the accepted connection against the signed Tailscale App Store network extension. The public TCP service never exposes the history reader directly. The reader receives its listening Unix socket by inheritance; the gateway opens that socket in a private directory and supplies the owner header. The gateway requests certificates in memory.

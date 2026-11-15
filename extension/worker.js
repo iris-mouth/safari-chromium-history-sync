@@ -89,11 +89,12 @@ async function resolveDirtyVisits() {
   await saveRuntime(state);
 }
 
-function sendNative(message) {
+async function sendNative(message) {
   return chrome.runtime.sendNativeMessage(HOST, {
     ...message,
     browserFamily: browserFamily(),
     extensionVersion: chrome.runtime.getManifest().version,
+    heldCount: await controller.heldCount(message.profileId),
     capabilities: ["cloud-delivery-v1"],
   });
 }
@@ -114,6 +115,7 @@ async function pushBrowserPage(state) {
   if (page.type !== "page" || page.events.length === 0) return;
   const events = [];
   const missing = [];
+  const held = [];
   const checked = new Map();
   let pageBytes = 1_024;
   for (const event of page.events) {
@@ -122,10 +124,11 @@ async function pushBrowserPage(state) {
     const prefix = `${event.url}\n`;
     if (typeof event.sourceKey !== "string" || !event.sourceKey.startsWith(prefix)) {
       // Legacy entries without a native visit identity cannot be safely verified.
-      break;
+      held.push(event.eventId);
+      continue;
     }
     const visitId = event.sourceKey.slice(prefix.length);
-    if (!visitId) break;
+    if (!visitId) { held.push(event.eventId); continue; }
     if (!checked.has(event.url)) checked.set(event.url, await chrome.history.getVisits({ url: event.url }));
     if (!checked.get(event.url).some((visit) => String(visit.visitId) === visitId)) {
       missing.push(event.eventId);
@@ -139,6 +142,7 @@ async function pushBrowserPage(state) {
     events.push(event);
     pageBytes += size;
   }
+  if (held.length) await controller.holdUnverifiable(state.profileId, held);
   if (missing.length) await controller.discardMissingBrowserVisits(state.profileId, missing);
   if (!events.length) return;
   const response = await sendNative({

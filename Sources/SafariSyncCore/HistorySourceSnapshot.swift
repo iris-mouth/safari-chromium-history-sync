@@ -23,8 +23,8 @@ public enum HistorySourceReadError: Error {
     case unavailable(String)
     case sqlite(code: Int32, message: String)
     case replacedDuringRead
+    case waitingForUnlock
     case invalidRow
-    case snapshotUnavailable(String)
 }
 
 public enum HistorySourceReader {
@@ -44,15 +44,14 @@ public enum HistorySourceReader {
         do {
             return try scanOnce(path: path, browser: browser, viewerOrigins: viewerOrigins, batchSize: batchSize, immutable: false, onStart: onStart, onBatch: onBatch)
         } catch HistorySourceReadError.sqlite(let code, _) where code & 0xff == SQLITE_CANTOPEN && walIsAbsent(path) {
+            // Chromium reconciliation requires a real SQLite read transaction.
+            if browser == .chromium { throw HistorySourceReadError.waitingForUnlock }
             // A closed WAL-mode browser can lack -wal/-shm. Immutable mode does
             // not create sidecars, but its results must stay staged until the
             // source and sidecar absence have been checked after the full scan.
             return try scanOnce(path: path, browser: browser, viewerOrigins: viewerOrigins, batchSize: batchSize, immutable: true, onStart: onStart, onBatch: onBatch)
         } catch HistorySourceReadError.sqlite(let code, _) where browser == .chromium && (code & 0xff == SQLITE_BUSY || code & 0xff == SQLITE_LOCKED) {
-            // Chromium may retain an exclusive lock for its whole session. A
-            // tightly checked, in-memory rollback-mode snapshot is used only
-            // before the journal has been synced and neither file changes.
-            return try scanExclusiveChromium(path: path, viewerOrigins: viewerOrigins, batchSize: batchSize, onStart: onStart, onBatch: onBatch)
+            throw HistorySourceReadError.waitingForUnlock
         }
     }
 
@@ -131,105 +130,6 @@ public enum HistorySourceReader {
             if visits.count >= batchSize { try onBatch(visits); visits.removeAll(keepingCapacity: true) }
         }
         if !visits.isEmpty { try onBatch(visits) }
-    }
-
-    private static func scanExclusiveChromium(path: String, viewerOrigins: [URL], batchSize: Int,
-                                               onStart: (String, Bool) throws -> Void,
-                                               onBatch: ([HistorySourceSnapshot.Visit]) throws -> Void) throws -> String {
-        guard batchSize > 0 else { throw HistorySourceReadError.invalidRow }
-        guard walIsAbsent(path) else { throw HistorySourceReadError.snapshotUnavailable("active WAL") }
-        let source = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW)
-        guard source >= 0 else { throw HistorySourceReadError.unavailable(path) }
-        defer { Darwin.close(source) }
-        let journalPath = path + "-journal"
-        let journal = open(journalPath, O_RDONLY | O_CLOEXEC | O_NOFOLLOW)
-        guard journal >= 0 else { throw HistorySourceReadError.snapshotUnavailable("journal unavailable") }
-        defer { Darwin.close(journal) }
-        let sourceStamp = try stamp(source)
-        let journalStamp = try stamp(journal)
-        guard try stamp(path) == sourceStamp, try stamp(journalPath) == journalStamp else { throw HistorySourceReadError.replacedDuringRead }
-        guard try inactiveJournal(journal, size: journalStamp[2]) else { throw HistorySourceReadError.snapshotUnavailable("transaction active") }
-        let size = sourceStamp[2]
-        let maxBytes = min(Int64(ProcessInfo.processInfo.physicalMemory / 4), Int64(2_147_483_648))
-        guard size >= 100, size <= maxBytes, size <= Int64(Int.max),
-              let buffer = sqlite3_malloc64(UInt64(size)) else { throw HistorySourceReadError.snapshotUnavailable("snapshot exceeds memory budget") }
-        defer { sqlite3_free(buffer) }
-        var offset = 0
-        while offset < Int(size) {
-            let readCount = Darwin.read(source, buffer.advanced(by: offset), min(1_048_576, Int(size) - offset))
-            if readCount < 0 && errno == EINTR { continue }
-            guard readCount > 0 else { throw HistorySourceReadError.replacedDuringRead }
-            offset += readCount
-        }
-        // A second byte-for-byte pass also rejects a torn copy if the browser
-        // writes while it is being read. Metadata and journal checks below
-        // still have to match; structural validation alone is insufficient.
-        var verify = [UInt8](repeating: 0, count: min(1_048_576, Int(size)))
-        offset = 0
-        while offset < Int(size) {
-            let amount = min(verify.count, Int(size) - offset)
-            let readCount = verify.withUnsafeMutableBytes { pread(source, $0.baseAddress, amount, off_t(offset)) }
-            if readCount < 0 && errno == EINTR { continue }
-            guard readCount == amount,
-                  verify.withUnsafeBytes({ memcmp($0.baseAddress, buffer.advanced(by: offset), amount) == 0 }) else {
-                throw HistorySourceReadError.replacedDuringRead
-            }
-            offset += readCount
-        }
-        let bytes = buffer.assumingMemoryBound(to: UInt8.self)
-        let signature = Array(UnsafeBufferPointer(start: bytes, count: 16))
-        guard signature == Array("SQLite format 3\0".utf8), bytes[18] == 1, bytes[19] == 1 else {
-            throw HistorySourceReadError.snapshotUnavailable("not a rollback-mode database")
-        }
-        guard try stamp(source) == sourceStamp, try stamp(path) == sourceStamp,
-              try stamp(journal) == journalStamp, try stamp(journalPath) == journalStamp,
-              try inactiveJournal(journal, size: journalStamp[2]), walIsAbsent(path) else {
-            throw HistorySourceReadError.replacedDuringRead
-        }
-        var memory: OpaquePointer?
-        guard sqlite3_open_v2(":memory:", &memory, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nil) == SQLITE_OK, let db = memory else {
-            if let memory { sqlite3_close(memory) }
-            throw HistorySourceReadError.unavailable(path)
-        }
-        defer { sqlite3_close(db) }
-        let result = sqlite3_deserialize(db, "main", bytes, size, size, UInt32(SQLITE_DESERIALIZE_READONLY))
-        guard result == SQLITE_OK else { throw HistorySourceReadError.sqlite(code: result, message: "snapshot unavailable") }
-        let checkSQL = "PRAGMA quick_check(1)"
-        var check: OpaquePointer?
-        guard sqlite3_prepare_v2(db, checkSQL, -1, &check, nil) == SQLITE_OK, let check else {
-            throw HistorySourceReadError.sqlite(code: sqlite3_extended_errcode(db), message: String(cString: sqlite3_errmsg(db)))
-        }
-        defer { sqlite3_finalize(check) }
-        guard sqlite3_step(check) == SQLITE_ROW, text(check, 0) == "ok", sqlite3_step(check) == SQLITE_DONE else {
-            throw HistorySourceReadError.replacedDuringRead
-        }
-        let sourceIdentity = "\(sourceStamp[0]):\(sourceStamp[1])"
-        // The source has been checked before opening this independent in-memory
-        // image. Subsequent browser writes cannot change the scanned image, so
-        // initial batches may be displayed just like a locked read transaction.
-        try scanRows(db: db, browser: .chromium, viewerOrigins: viewerOrigins, batchSize: batchSize,
-                     onStart: { try onStart(sourceIdentity, true) }, onBatch: onBatch)
-        return sourceIdentity
-    }
-
-    private static func inactiveJournal(_ descriptor: Int32, size: Int64) throws -> Bool {
-        if size == 0 { return true }
-        guard size >= 28 else { return false }
-        var header = [UInt8](repeating: 0, count: 28)
-        let count = header.withUnsafeMutableBytes { pread(descriptor, $0.baseAddress, $0.count, 0) }
-        guard count == header.count else { throw HistorySourceReadError.replacedDuringRead }
-        // SQLite leaves the magic and record count zero until journal pages
-        // have been synced; it does not spill database pages before then.
-        // The remaining header contains ordinary transaction metadata.
-        return header.prefix(12).allSatisfy { $0 == 0 }
-    }
-
-    private static func stamp(_ descriptor: Int32) throws -> [Int64] {
-        var info = stat()
-        guard fstat(descriptor, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG else { throw HistorySourceReadError.replacedDuringRead }
-        return [Int64(info.st_dev), Int64(info.st_ino), info.st_size,
-                Int64(info.st_mtimespec.tv_sec), Int64(info.st_mtimespec.tv_nsec),
-                Int64(info.st_ctimespec.tv_sec), Int64(info.st_ctimespec.tv_nsec)]
     }
 
     private static func isProductURL(_ url: URL, viewerOrigins: [URL]) -> Bool {

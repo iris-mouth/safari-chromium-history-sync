@@ -35,6 +35,7 @@ public struct BrowserMessage: Codable, Sendable {
     public let outcome: String?
     public let browserFamily: String?
     public let extensionVersion: String?
+    public let heldCount: Int?
     public let capabilities: [String]?
     public let localReceipts: [BrowserLocalReceipt]?
     public let removedURLs: [String]?
@@ -43,7 +44,7 @@ public struct BrowserMessage: Codable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case version, operation, events, limit, stream, outcome, browserFamily, extensionVersion
-        case capabilities, localReceipts, removedURLs, allHistoryRemoved, removedAt
+        case heldCount, capabilities, localReceipts, removedURLs, allHistoryRemoved, removedAt
         case eventID = "eventId"
         case profileID = "profileId"
         case afterSequence, throughSequence
@@ -56,6 +57,7 @@ public struct BrowserProfileDescriptor: Codable, Equatable, Sendable {
     public let displayName: String
     public let extensionVersion: String?
     public let lastSeen: Date
+    public let heldCount: Int?
     public let active: Bool
 
     public init(
@@ -64,18 +66,19 @@ public struct BrowserProfileDescriptor: Codable, Equatable, Sendable {
         displayName: String,
         extensionVersion: String?,
         lastSeen: Date,
-        active: Bool
+        active: Bool, heldCount: Int? = nil
     ) {
         self.profileID = profileID
         self.browserFamily = browserFamily
         self.displayName = displayName
         self.extensionVersion = extensionVersion
         self.lastSeen = lastSeen
+        self.heldCount = heldCount
         self.active = active
     }
 
     enum CodingKeys: String, CodingKey {
-        case browserFamily, displayName, extensionVersion, lastSeen, active
+        case browserFamily, displayName, extensionVersion, lastSeen, active, heldCount
         case profileID = "profileId"
     }
 }

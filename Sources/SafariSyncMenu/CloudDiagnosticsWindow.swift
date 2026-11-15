@@ -6,7 +6,7 @@ import UniformTypeIdentifiers
 final class CloudDiagnosticsWindow: NSWindowController, NSTableViewDataSource, NSTableViewDelegate {
     let profileID: String
     private let request: (MenuCommand) async throws -> Data
-    private let summary = NSTextField(wrappingLabelWithString: "Loading…")
+    private let summary = NSTextField(wrappingLabelWithString: NSLocalizedString("Loading…", comment: ""))
     private let table = NSTableView()
     private var records: [CloudDelivery] = []
     private let advanced = NSStackView()
@@ -19,7 +19,7 @@ final class CloudDiagnosticsWindow: NSWindowController, NSTableViewDataSource, N
         self.request = request
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1080, height: 620),
             styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
-        window.title = "History Sync Diagnostics"
+        window.title = NSLocalizedString("History Sync Diagnostics", comment: "")
         window.minSize = NSSize(width: 1000, height: 620)
         window.isReleasedWhenClosed = false
         super.init(window: window)
@@ -38,12 +38,12 @@ final class CloudDiagnosticsWindow: NSWindowController, NSTableViewDataSource, N
         stack.addArrangedSubview(summary)
         summary.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -32).isActive = true
         let instructions = NSTextField(wrappingLabelWithString:
-            "Review delivered history and sync progress here. Check arrival in your iPhone or iPad's history. Expand Show Tests & Advanced Actions to add test history or resend a visit.")
+            NSLocalizedString("Review delivered history and sync progress here. Check arrival in your iPhone or iPad's history. Expand Show Tests & Advanced Actions to add test history or resend a visit.", comment: ""))
         stack.addArrangedSubview(instructions)
         instructions.widthAnchor.constraint(equalTo: summary.widthAnchor).isActive = true
-        for (id, title, width) in [("provider", "Destination", 80.0), ("url", "URL", 380.0),
-                                    ("time", "Added to History", 130.0), ("native", "Native Sync Progress", 210.0),
-                                    ("remote", "Arrival on Device", 170.0)] {
+        for (id, title, width) in [("provider", NSLocalizedString("Destination", comment: ""), 80.0), ("url", "URL", 380.0),
+                                    ("time", NSLocalizedString("Added to History", comment: ""), 130.0), ("native", NSLocalizedString("Native Sync Progress", comment: ""), 210.0),
+                                    ("remote", NSLocalizedString("Arrival on Device", comment: ""), 170.0)] {
             let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(id))
             column.title = title
             column.width = width
@@ -64,33 +64,33 @@ final class CloudDiagnosticsWindow: NSWindowController, NSTableViewDataSource, N
         scroll.widthAnchor.constraint(equalTo: summary.widthAnchor).isActive = true
         scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 260).isActive = true
         let browsing = NSStackView(views: [
-            button("Refresh Display", #selector(refresh)),
-            button("Show Older Records", #selector(older)),
-            selectionButton("Copy Selected URL", #selector(copyURL)),
+            button(NSLocalizedString("Refresh Display", comment: ""), #selector(refresh)),
+            button(NSLocalizedString("Show Older Records", comment: ""), #selector(older)),
+            selectionButton(NSLocalizedString("Copy Selected URL", comment: ""), #selector(copyURL)),
         ])
         browsing.spacing = 8
         stack.addArrangedSubview(browsing)
-        let disclosure = NSButton(checkboxWithTitle: "Show Tests & Advanced Actions", target: self, action: #selector(toggleAdvanced(_:)))
+        let disclosure = NSButton(checkboxWithTitle: NSLocalizedString("Show Tests & Advanced Actions", comment: ""), target: self, action: #selector(toggleAdvanced(_:)))
         stack.addArrangedSubview(disclosure)
         advanced.orientation = .vertical
         advanced.spacing = 8
         stack.addArrangedSubview(advanced)
         let explanation = NSTextField(wrappingLabelWithString:
-            "Adding a test URL or resending it creates a new history visit. Review the destination and changes before confirming. Search the device's history for the selected URL before recording arrival.")
+            NSLocalizedString("Adding a test URL or resending it creates a new history visit. Review the destination and changes before confirming. Search the device's history for the selected URL before recording arrival.", comment: ""))
         advanced.addArrangedSubview(explanation)
         explanation.widthAnchor.constraint(equalTo: summary.widthAnchor).isActive = true
         let probes = NSStackView(views: [
-            button("Add Test History to Safari…", #selector(probeSafari)),
-            button("Add Test History to Chrome/Edge…", #selector(probeBrowser)),
-            selectionButton("Record Arrival on Device", #selector(markSeen)),
-            selectionButton("Record as Unconfirmed", #selector(markNotSeen)),
+            button(NSLocalizedString("Add Test History to Safari…", comment: ""), #selector(probeSafari)),
+            button(NSLocalizedString("Add Test History to Chrome/Edge…", comment: ""), #selector(probeBrowser)),
+            selectionButton(NSLocalizedString("Record Arrival on Device", comment: ""), #selector(markSeen)),
+            selectionButton(NSLocalizedString("Record as Unconfirmed", comment: ""), #selector(markNotSeen)),
         ])
         probes.spacing = 8
         advanced.addArrangedSubview(probes)
         let actions = NSStackView(views: [
-            selectionButton("Add Selected URL to History Again…", #selector(reviewReplay)),
-            button("Compare Device's Safari History…", #selector(compareExport)),
-            button("Record Account Change…", #selector(rebind)),
+            selectionButton(NSLocalizedString("Add Selected URL to History Again…", comment: ""), #selector(reviewReplay)),
+            button(NSLocalizedString("Compare Device's Safari History…", comment: ""), #selector(compareExport)),
+            button(NSLocalizedString("Record Account Change…", comment: ""), #selector(rebind)),
         ])
         actions.spacing = 8
         advanced.addArrangedSubview(actions)
@@ -159,11 +159,11 @@ final class CloudDiagnosticsWindow: NSWindowController, NSTableViewDataSource, N
         }
         updateSelectionButtons()
         let health = diagnostics.summary
-        summary.stringValue = "Showing \(records.count) of \(diagnostics.totalDeliveries) records\nPending local delivery: \(health.pendingLocal) · Waiting for Safari sync: \(health.safariPending) · Possible stalls: \(health.possibleStalls)\nSafari checkpoint covered: \(health.checkpointCovered) · Chrome/Edge arrival unverified: \(health.browserNotObservable) · Arrival confirmed on device: \(health.remoteSeen) · Removed/changed: \(health.suppressed)"
+        summary.stringValue = String(format: NSLocalizedString("Showing %@ of %@ records\nPending local delivery: %@ · Waiting for Safari sync: %@ · Possible stalls: %@\nSafari checkpoint covered: %@ · Chrome/Edge arrival unverified: %@ · Arrival confirmed on device: %@ · Removed/changed: %@", comment: ""), String(describing: records.count), String(describing: diagnostics.totalDeliveries), String(describing: health.pendingLocal), String(describing: health.safariPending), String(describing: health.possibleStalls), String(describing: health.checkpointCovered), String(describing: health.browserNotObservable), String(describing: health.remoteSeen), String(describing: health.suppressed))
         if let assist = diagnostics.safariAssist {
-            summary.stringValue += "\nSafari sync assist: \(assist.enabled ? "Enabled" : "Disabled") (change via Configure Safari Sync Assist… in the menu)"
+            summary.stringValue += String(format: NSLocalizedString("\nSafari sync assist: %@ (change via Configure Safari Sync Assist… in the menu)", comment: ""), String(describing: assist.enabled ? NSLocalizedString("Enabled", comment: "") : NSLocalizedString("Disabled", comment: "")))
             if let next = assist.nextAttemptAt, health.safariPending > 0 {
-                summary.stringValue += "\nNext automatic attempt: \(next.formatted(date: .omitted, time: .standard))"
+                summary.stringValue += String(format: NSLocalizedString("\nNext automatic attempt: %@", comment: ""), String(describing: next.formatted(date: .omitted, time: .standard)))
             }
         }
         if health.capacityReached { summary.stringValue += "\nThe record limit was reached. New deliveries wait until space is available." }
@@ -182,20 +182,20 @@ final class CloudDiagnosticsWindow: NSWindowController, NSTableViewDataSource, N
             do { try await work() }
             catch {
                 let alert = NSAlert()
-                alert.messageText = "Could Not Complete the Action"
+                alert.messageText = NSLocalizedString("Could Not Complete the Action", comment: "")
                 if let typed = error as? TypedError {
                     switch typed.code {
                     case "CLOUD_EXTENSION_UPGRADE_REQUIRED":
-                        alert.informativeText = "Reload the Chrome/Edge extension bundled with the app, then refresh the display."
+                        alert.informativeText = NSLocalizedString("Reload the Chrome/Edge extension bundled with the app, then refresh the display.", comment: "")
                     case "PROFILE_NOT_ACTIVE", "STALE_CLOUD_REPAIR_PLAN":
-                        alert.informativeText = "The sync browser or account binding changed. Close this window and reopen Detailed Diagnostics."
+                        alert.informativeText = NSLocalizedString("The sync browser or account binding changed. Close this window and reopen Detailed Diagnostics.", comment: "")
                     case "INVALID_SAFARI_EXPORT":
-                        alert.informativeText = "Choose Safari's History.json exported from the receiving device (up to 32 MiB)."
+                        alert.informativeText = NSLocalizedString("Choose Safari's History.json exported from the receiving device (up to 32 MiB).", comment: "")
                     case "CLOUD_REPLAY_NOT_ALLOWED":
-                        alert.informativeText = "Choose a confirmed local delivery that has not been removed, changed, or affected by an account change."
+                        alert.informativeText = NSLocalizedString("Choose a confirmed local delivery that has not been removed, changed, or affected by an account change.", comment: "")
                     default: alert.informativeText = typed.code
                     }
-                } else { alert.informativeText = "The sync service is unavailable or the selected file could not be read. Check the connection and file." }
+                } else { alert.informativeText = NSLocalizedString("The sync service is unavailable or the selected file could not be read. Check the connection and file.", comment: "") }
                 alert.runModal()
             }
         }
@@ -211,12 +211,12 @@ final class CloudDiagnosticsWindow: NSWindowController, NSTableViewDataSource, N
     }
 
     private func probe(_ provider: CloudProvider) {
-        let route = provider == .safari ? "Safari on this Mac" : "the selected Chrome/Edge profile"
+        let route = provider == .safari ? NSLocalizedString("Safari on this Mac", comment: "") : NSLocalizedString("the selected Chrome/Edge profile", comment: "")
         let confirmation = NSAlert()
-        confirmation.messageText = "Add Test History to \(route)?"
-        confirmation.informativeText = "A unique example.com test URL will be added through the normal delivery path. It may sync to other devices. After delivery, search for the URL in your iPhone or iPad's history to check arrival."
-        confirmation.addButton(withTitle: "Add Test History")
-        confirmation.addButton(withTitle: "Cancel")
+        confirmation.messageText = String(format: NSLocalizedString("Add Test History to %@?", comment: ""), String(describing: route))
+        confirmation.informativeText = NSLocalizedString("A unique example.com test URL will be added through the normal delivery path. It may sync to other devices. After delivery, search for the URL in your iPhone or iPad's history to check arrival.", comment: "")
+        confirmation.addButton(withTitle: NSLocalizedString("Add Test History", comment: ""))
+        confirmation.addButton(withTitle: NSLocalizedString("Cancel", comment: ""))
         guard confirmation.runModal() == .alertFirstButtonReturn else { return }
         run {
             let before = Set(self.records.map(\.id))
@@ -225,8 +225,8 @@ final class CloudDiagnosticsWindow: NSWindowController, NSTableViewDataSource, N
             if let row = self.records.firstIndex(where: { !before.contains($0.id) && $0.kind == "probe" && $0.provider == provider }) {
                 self.table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
                 let alert = NSAlert()
-                alert.messageText = "Search for This URL in the Device's History"
-                alert.informativeText = "\(self.records[row].url.absoluteString)\n\nSearch Safari or Chrome/Edge history on an iPhone or iPad using the same account. Confirm that the URL is listed before opening it. Once delivery is complete, refresh the display and record arrival for the selected record."
+                alert.messageText = NSLocalizedString("Search for This URL in the Device's History", comment: "")
+                alert.informativeText = String(format: NSLocalizedString("%@\n\nSearch Safari or Chrome/Edge history on an iPhone or iPad using the same account. Confirm that the URL is listed before opening it. Once delivery is complete, refresh the display and record arrival for the selected record.", comment: ""), String(describing: self.records[row].url.absoluteString))
                 alert.runModal()
             }
         }
@@ -249,10 +249,10 @@ final class CloudDiagnosticsWindow: NSWindowController, NSTableViewDataSource, N
             self.display(diagnostics)
             guard let plan = diagnostics.plan else { throw TypedError(code: "STALE_CLOUD_REPAIR_PLAN") }
             let alert = NSAlert()
-            alert.messageText = "Add the Selected URL to History Again?"
-            alert.informativeText = "\(plan.url.absoluteString)\n\nDestination: \(plan.provider == .safari ? "Safari / iCloud" : "Selected Chrome/Edge profile")\n\nCheck that the intended account is signed in and history sync is enabled. This adds one visit at the current time. Check arrival on the receiving device afterward."
-            alert.addButton(withTitle: "Add to History Again")
-            alert.addButton(withTitle: "Cancel")
+            alert.messageText = NSLocalizedString("Add the Selected URL to History Again?", comment: "")
+            alert.informativeText = String(format: NSLocalizedString("%@\n\nDestination: %@\n\nCheck that the intended account is signed in and history sync is enabled. This adds one visit at the current time. Check arrival on the receiving device afterward.", comment: ""), String(describing: plan.url.absoluteString), String(describing: plan.provider == .safari ? "Safari / iCloud" : "Selected Chrome/Edge profile"))
+            alert.addButton(withTitle: NSLocalizedString("Add to History Again", comment: ""))
+            alert.addButton(withTitle: NSLocalizedString("Cancel", comment: ""))
             guard alert.runModal() == .alertFirstButtonReturn else { return }
             self.display(try await self.perform(self.command("cloudExecuteReplay", planID: plan.id)))
         }
@@ -261,13 +261,13 @@ final class CloudDiagnosticsWindow: NSWindowController, NSTableViewDataSource, N
     @objc private func compareExport() {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.json]
-        panel.message = "Choose Safari's History.json exported from the receiving iPhone or iPad (up to 32 MiB)."
+        panel.message = NSLocalizedString("Choose Safari's History.json exported from the receiving iPhone or iPad (up to 32 MiB).", comment: "")
         guard panel.runModal() == .OK, let url = panel.url else { return }
         let alert = NSAlert()
-        alert.messageText = "Is This File from the Receiving Device?"
-        alert.informativeText = "Use a file from an iPhone or iPad with the same Apple Account and Safari profile. Records with a matching URL and latest visit time will be marked as arrived. Missing records remain unverified."
-        alert.addButton(withTitle: "Compare with File")
-        alert.addButton(withTitle: "Cancel")
+        alert.messageText = NSLocalizedString("Is This File from the Receiving Device?", comment: "")
+        alert.informativeText = NSLocalizedString("Use a file from an iPhone or iPad with the same Apple Account and Safari profile. Records with a matching URL and latest visit time will be marked as arrived. Missing records remain unverified.", comment: "")
+        alert.addButton(withTitle: NSLocalizedString("Compare with File", comment: ""))
+        alert.addButton(withTitle: NSLocalizedString("Cancel", comment: ""))
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         run {
             let file = try FileHandle(forReadingFrom: url)
@@ -295,13 +295,13 @@ final class CloudDiagnosticsWindow: NSWindowController, NSTableViewDataSource, N
 
     @objc private func rebind() {
         let picker = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 260, height: 28))
-        picker.addItems(withTitles: ["Safari / Apple Account", "Chrome/Edge Account"])
+        picker.addItems(withTitles: [NSLocalizedString("Safari / Apple Account", comment: ""), NSLocalizedString("Chrome/Edge Account", comment: "")])
         let alert = NSAlert()
-        alert.messageText = "Record an Account Change for Sync?"
-        alert.informativeText = "Use this after changing the browser or iCloud account. Pending tests and replays for the previous account are cancelled, and earlier arrival evidence stays separate from the new account. Change the signed-in account in the browser or System Settings."
+        alert.messageText = NSLocalizedString("Record an Account Change for Sync?", comment: "")
+        alert.informativeText = NSLocalizedString("Use this after changing the browser or iCloud account. Pending tests and replays for the previous account are cancelled, and earlier arrival evidence stays separate from the new account. Change the signed-in account in the browser or System Settings.", comment: "")
         alert.accessoryView = picker
-        alert.addButton(withTitle: "Record Account Change")
-        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: NSLocalizedString("Record Account Change", comment: ""))
+        alert.addButton(withTitle: NSLocalizedString("Cancel", comment: ""))
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         let provider: CloudProvider = picker.indexOfSelectedItem == 0 ? .safari : .browser
         run { self.display(try await self.perform(self.command("cloudRebind", provider: provider))) }
@@ -316,16 +316,16 @@ final class CloudDiagnosticsWindow: NSWindowController, NSTableViewDataSource, N
         switch id {
         case "provider": value = entry.provider == .safari ? "Safari" : "Chrome/Edge"
         case "url": value = entry.url.absoluteString
-        case "time": value = entry.destinationTime?.formatted(date: .abbreviated, time: .shortened) ?? "Pending delivery"
+        case "time": value = entry.destinationTime?.formatted(date: .abbreviated, time: .shortened) ?? NSLocalizedString("Pending delivery", comment: "")
         case "native":
-            value = ["notObservable": "Waiting for device confirmation", "pending": "Waiting for Safari sync",
-                     "waitingForSafariActivity": "Waiting for Safari activity", "possibleStall": "Sync progress is delayed",
-                     "checkpointCovered": "Safari checkpoint covered", "localMissingOrChanged": "History removed or changed",
-                     "databaseChanged": "History database changed", "localRemoved": "History removed",
-                     "accountBindingChanged": "Cancelled after account change"][entry.nativeState] ?? entry.nativeState
+            value = ["notObservable": NSLocalizedString("Waiting for device confirmation", comment: ""), "pending": NSLocalizedString("Waiting for Safari sync", comment: ""),
+                     "waitingForSafariActivity": NSLocalizedString("Waiting for Safari activity", comment: ""), "possibleStall": NSLocalizedString("Sync progress is delayed", comment: ""),
+                     "checkpointCovered": NSLocalizedString("Safari checkpoint covered", comment: ""), "localMissingOrChanged": NSLocalizedString("History removed or changed", comment: ""),
+                     "databaseChanged": NSLocalizedString("History database changed", comment: ""), "localRemoved": NSLocalizedString("History removed", comment: ""),
+                     "accountBindingChanged": NSLocalizedString("Cancelled after account change", comment: "")][entry.nativeState] ?? entry.nativeState
         default:
-            value = ["unverified": "Unverified", "seen": "Arrival confirmed (reported)",
-                     "notObserved": "Not found yet"][entry.remoteState] ?? entry.remoteState
+            value = ["unverified": NSLocalizedString("Unverified", comment: ""), "seen": NSLocalizedString("Arrival confirmed (reported)", comment: ""),
+                     "notObserved": NSLocalizedString("Not found yet", comment: "")][entry.remoteState] ?? entry.remoteState
         }
         let field = NSTextField(labelWithString: value)
         field.lineBreakMode = .byTruncatingMiddle

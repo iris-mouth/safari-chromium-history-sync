@@ -411,3 +411,21 @@ test("収集停止・失敗・未設定を正常な空結果と区別する", as
   await page.reload();
   await expect(page.getByText("保存対象が未設定です", { exact: true })).toBeVisible();
 });
+
+test("changing language preserves the current view and restores focus after details", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator(".record").first()).toBeVisible();
+  const location = page.url();
+  await page.getByLabel("表示言語").selectOption("en");
+  await expect(page.locator("html")).toHaveAttribute("lang", "en");
+  await expect(page.getByLabel("Start date")).toBeVisible();
+  expect(page.url()).toBe(location);
+  const first = page.locator(".record").first();
+  await first.focus();
+  await first.press("Enter");
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(first).toBeFocused();
+  await page.reload();
+  await expect(page.getByLabel("Language")).toHaveValue("en");
+});

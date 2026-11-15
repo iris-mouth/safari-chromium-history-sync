@@ -68,7 +68,7 @@ struct SetupCoordinator {
         let extensionID = try extensionID(in: extensionDirectory)
         let bridgeURL = Bundle.main.bundleURL
             .appendingPathComponent("Contents/MacOS/SafariSyncBridge")
-        let agentURL = Bundle.main.bundleURL.deletingLastPathComponent()
+        let agentURL = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers")
             .appendingPathComponent(ProductIdentity.agentBundleName, isDirectory: true)
         guard FileManager.default.isExecutableFile(atPath: bridgeURL.path) else {
             throw SetupError.bridgeMissing
@@ -156,12 +156,12 @@ enum SetupError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .bridgeMissing: "The Native Messaging bridge is missing from the installed app."
-        case .agentMissing: "\(ProductIdentity.agentBundleName) is missing beside the Menu app."
-        case .extensionMissing: "The bundled Chromium extension is missing."
-        case .extensionKeyMissing: "The bundled Chromium extension has no stable public key."
-        case .bundleVersionMismatch: "The Menu and Agent app versions do not match. Reinstall the package."
-        case .invalidBundleSignature: "An installed app failed signature verification. Reinstall the package."
+        case .bridgeMissing: NSLocalizedString("The Native Messaging bridge is missing from the installed app.", comment: "")
+        case .agentMissing: "\(ProductIdentity.agentBundleName) is missing inside the application."
+        case .extensionMissing: NSLocalizedString("The bundled Chromium extension is missing.", comment: "")
+        case .extensionKeyMissing: NSLocalizedString("The bundled Chromium extension has no stable public key.", comment: "")
+        case .bundleVersionMismatch: NSLocalizedString("The Menu and Agent app versions do not match. Reinstall the package.", comment: "")
+        case .invalidBundleSignature: NSLocalizedString("An installed app failed signature verification. Reinstall the package.", comment: "")
         }
     }
 }

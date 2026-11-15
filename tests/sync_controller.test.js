@@ -328,3 +328,22 @@ test("version 1 state migrates queues without retaining switch state", async () 
     unrecoverableCount: 0,
   });
 });
+
+test("holding a legacy visit survives restart and a later cumulative receipt", async () => {
+  const store = memoryStore();
+  let sync = createSyncController({ store });
+  const profileId = "edge:fixture";
+  const common = { version: 1, profileId, stream: "browserToSafari" };
+  const url = "https://fixture.example/";
+  await sync.browserExchange({ ...common, operation: "publish", events: [
+    { url, eventId: "old" }, { url, eventId: "new", sourceKey: url + "\n7" },
+  ] });
+  await sync.holdUnverifiable(profileId, ["old"]);
+  sync = createSyncController({ store });
+  const { events } = await sync.browserExchange({ ...common, operation: "pull" });
+  assert.deepEqual(events.map(e => e.eventId), ["new"]);
+  await sync.browserExchange({ ...common, operation: "ack", throughSequence: events[0].sequence });
+  await sync.holdUnverifiable(profileId, ["old"]);
+  assert.equal(await sync.heldCount(profileId), 1);
+  assert.equal(await sync.heldCount("chrome:fixture"), 0);
+});

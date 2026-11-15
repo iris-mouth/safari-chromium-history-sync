@@ -235,6 +235,11 @@ public final class HistoryCollector: @unchecked Sendable {
                 do {
                     try collect(source, cancellationVersion: version)
                     if source.browser == .chromium && !cancelled(version) { try? collectChromiumIcons(source, cancellationVersion: version) }
+                } catch HistorySourceReadError.waitingForUnlock {
+                    try db.transaction {
+                        try db.prepare("DELETE FROM scan_visits WHERE source_id=?").run([.text(source.id)])
+                        try db.prepare("UPDATE sources SET state='waiting',error=NULL WHERE id=?").run([.text(source.id)])
+                    }
                 } catch HistoryScanInterrupted.cancelled {
                     try db.transaction {
                         try db.prepare("DELETE FROM scan_visits WHERE source_id=?").run([.text(source.id)])

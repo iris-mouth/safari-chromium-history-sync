@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+apps="$3/Applications"
+main="$apps/Safari Chromium History Sync.app"
+old="$apps/Safari Chromium History Sync Agent.app"
+codesign --verify --deep --strict "$main"
+[ -x "$main/Contents/Helpers/Safari Chromium History Sync Agent.app/Contents/MacOS/SafariSyncAgent" ]
+if [ -d "$old" ] && [ ! -L "$old" ]; then
+  [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$old/Contents/Info.plist")" = io.github.irismouth.safari-chromium-history-sync.agent ]
+  rm -rf "$old"
+fi

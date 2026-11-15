@@ -27,7 +27,7 @@ Chrome/Edge extension
 SafariSyncBridge — no FDA
         │ role + nonce + HMAC, Unix socket 0600
         ▼
-Safari Chromium History Sync Agent.app sibling process — FDA only
+Safari Chromium History Sync Agent.app embedded helper — FDA only
         │ structural schema adapter
         ▼
 Safari History.db ── Safari CloudHistory ── iPhone Safari
@@ -35,7 +35,7 @@ Safari History.db ── Safari CloudHistory ── iPhone Safari
 SafariSyncMenu — no FDA ── authenticated menu role ──┘
 ```
 
-The Menu app is the registered login item. On launch it starts the sibling Agent app; keeping the Agent as a top-level bundle ensures macOS TCC attributes Safari database access to the Agent identifier rather than to the outer Menu app.
+The Menu app is the registered login item. On launch it opens the embedded Agent by its bundle URL. Full Disk Access belongs to that helper.
 
 The Bridge cannot open Safari's database directly, but it relays bounded Safari history pages to the selected Extension. The Menu cannot use browser transport. The Agent accepts only `bridge` and `menu` roles with valid HMACs and rejects replayed nonces. The HMAC key is stored in an owner-only mode-`0600` file so separately signed local-development executables do not trigger Keychain authorization prompts. This authenticates messages against accidental or cross-user callers, not against arbitrary code already executing as the current user, which can read the key. Only the Agent reads the Keychain root secret used for the AES-GCM sealed state document. Delivery idempotency is kept in a separate Agent-owned SQLite ledger rather than adding tables to Safari's database.
 
@@ -123,7 +123,7 @@ The Agent recognizes separate blocked issue codes for an unsupported runtime, Sa
 
 There is no generic repair command.
 
-The Extension is bundled as an unpacked-development artifact inside the Menu app. Setup opens the selected browser's extensions page and reveals that folder; browser approval and macOS privacy approval remain user actions. The ad-hoc-signed app bundles and unsigned local PKG are payload-only and install the Menu and Agent as sibling app bundles under `/Applications`. User-specific manifests and login-item state are created on first launch, never by privileged installer scripts. Store distribution, Developer ID signing, and notarization are not implemented.
+The Extension is bundled as an unpacked-development artifact inside the Menu app. Setup opens the selected browser's extensions page and reveals that folder; browser approval and macOS privacy approval remain user actions. The unsigned local PKG installs one ad-hoc-signed Menu app in `/Applications`, with the Agent, Viewer and gateway inside Contents/Helpers. Its installer scripts verify the replacement before removing a product-owned sibling Agent from an earlier build. User-specific manifests and login-item state are created on first launch, never by privileged installer scripts. Store distribution, Developer ID signing, and notarization are not implemented.
 
 ## Migration and rollback
 

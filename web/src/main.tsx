@@ -1,3 +1,4 @@
+import { english } from "./language";
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./style.css";
@@ -29,7 +30,15 @@ type Page = {
   cursor: string | null;
   icons: Record<string, string>;
 };
-type Source = { id: string; browser_type: string; profile_name: string; state: string; last_success: number | null; count: number; error: string | null };
+type Source = {
+  id: string;
+  browser_type: string;
+  profile_name: string;
+  state: string;
+  last_success: number | null;
+  count: number;
+  error: string | null;
+};
 type Status = {
   sources?: Source[];
   collection_enabled?: boolean;
@@ -95,6 +104,27 @@ function SiteIcon({ source }: { source?: string }) {
   );
 }
 function App() {
+  const [preference, setPreference] = useState(() => {
+    try {
+      return localStorage.getItem("viewerLanguage") || "auto";
+    } catch {
+      return "auto";
+    }
+  });
+  const lang =
+    preference === "en" || preference === "ja"
+      ? preference
+      : navigator.languages
+          .map((v) => v.split("-")[0])
+          .find((v) => v === "en" || v === "ja") || "en";
+  const t = (s: string) => (lang === "ja" ? s : (english[s] ?? s));
+  useLayoutEffect(() => {
+    document.documentElement.lang = lang;
+    document.title = t("履歴") + " | Safari Chromium History Sync";
+  }, [lang]);
+  const dialog = useRef<HTMLDialogElement>(null);
+  const [readyForSearch, setReadyForSearch] = useState(false);
+  const invoker = useRef<HTMLElement | null>(null);
   const [view, setView] = useState<View>(fromUrl),
     [input, setInput] = useState(fromUrl().q),
     [rows, setRows] = useState<Row[]>([]);
@@ -153,6 +183,10 @@ function App() {
     detailController.current?.abort();
     detailController.current = null;
     setDetail(null);
+    if (dialog.current?.open) {
+      dialog.current.close();
+      invoker.current?.focus({ preventScroll: true });
+    }
   }
   function invalidateRequests() {
     clearTimeout(timer.current);
@@ -368,7 +402,10 @@ function App() {
         setCursor(null);
       }
     } finally {
-      if (request === serial.current) setBusy(false);
+      if (request === serial.current) {
+        setBusy(false);
+        setReadyForSearch(true);
+      }
     }
   }
   function search(value: string) {
@@ -397,6 +434,9 @@ function App() {
   }
   async function open(row: Row) {
     closeDetail();
+    invoker.current = document.querySelector<HTMLElement>(
+      "#row-" + row.id + " button",
+    );
     setError("");
     const generation = detailSerial.current;
     const ac = new AbortController();
@@ -418,40 +458,44 @@ function App() {
   }
   useEffect(() => {
     if (!detail) return;
-    const key = (e: KeyboardEvent) => {
-      if (e.key === "Escape") closeDetail();
-      if (e.key === "Tab") {
-        const elements = Array.from(
-          document.querySelectorAll<HTMLElement>(
-            ".details button, .details a[href]",
-          ),
-        );
-        const first = elements[0],
-          last = elements[elements.length - 1];
-        if (e.shiftKey && document.activeElement === first) {
-          e.preventDefault();
-          last?.focus();
-        } else if (!e.shiftKey && document.activeElement === last) {
-          e.preventDefault();
-          first?.focus();
-        }
-      }
-    };
-    addEventListener("keydown", key);
-    return () => removeEventListener("keydown", key);
+    const node = dialog.current;
+    node?.showModal();
+    return () => node?.close();
   }, [detail]);
   const safeUrl =
     detail && /^https?:\/\//i.test(detail.url) ? detail.url : null;
   return (
     <>
       <main>
-        <h1 className="sr-only">履歴</h1>
-        <section className="controls" aria-label="履歴の条件">
+        <header className="mast">
+          <h1>{t("履歴")}</h1>
+          <label>
+            {lang === "ja" ? "表示言語" : "Language"}{" "}
+            <select
+              value={preference}
+              onChange={(e) => {
+                const v = e.target.value;
+                setPreference(v);
+                try {
+                  localStorage.setItem("viewerLanguage", v);
+                } catch {}
+              }}
+            >
+              <option value="auto">
+                {lang === "ja" ? "自動" : "Automatic"}
+              </option>
+              <option value="ja">日本語</option>
+              <option value="en">English</option>
+            </select>
+          </label>
+        </header>
+        <section className="controls" aria-label={t("履歴の条件")}>
           <label className="search">
-            全期間を検索
+            {t("全期間を検索")}
             <input
               type="search"
-              placeholder="タイトルやURLから探す"
+              disabled={!readyForSearch}
+              placeholder={t("タイトルやURLから探す")}
               value={input}
               onChange={(e) => typing(e.target.value)}
               onCompositionStart={() => {
@@ -466,6 +510,7 @@ function App() {
                 if (
                   e.key === "Enter" &&
                   !e.nativeEvent.isComposing &&
+                  e.nativeEvent.keyCode !== 229 &&
                   !composing.current
                 ) {
                   e.preventDefault();
@@ -489,9 +534,9 @@ function App() {
           >
             <div className="date-fields">
               <label>
-                開始日
+                {t("開始日")}
                 <input
-                  aria-label="開始日"
+                  aria-label={t("開始日")}
                   type="date"
                   name="start"
                   defaultValue={view.start}
@@ -500,36 +545,61 @@ function App() {
               </label>
               <span>—</span>
               <label>
-                終了日
+                {t("終了日")}
                 <input
-                  aria-label="終了日"
+                  aria-label={t("終了日")}
                   type="date"
                   name="end"
                   defaultValue={view.end}
                   required
                 />
               </label>
-              <button type="submit">表示</button>
+              <button type="submit">{t("表示")}</button>
             </div>
           </form>
           <div className="data-status">
             {latest
-              ? `取り込み済みの最新: ${latest.slice(0, 10)} ${latest.slice(11, 16)}`
-              : "取り込み済みの履歴なし"}
+              ? `${lang === "ja" ? "取り込み済みの最新" : "Latest visit"}: ${latest.slice(0, 10)} ${latest.slice(11, 16)}`
+              : t("取り込み済みの履歴なし")}
           </div>
           {sources && (
             <details className="source-status">
-              <summary>収集状態 {collectionEnabled ? "" : "（一時停止中）"}</summary>
-              {sources.length === 0 ? <p>保存対象が未設定です。</p> : (
-                <ul>{sources.map((source) => <li key={source.id}>
-                  {source.browser_type} {source.profile_name}：
-                  {source.state === "complete" ? "取得完了" : source.state === "collecting" ? "取り込み中" : source.state === "failed" ? "取得失敗" : "未完了"}
-                  （保存 {source.count} 件、最終成功 {source.last_success ? new Date(source.last_success * 1000).toLocaleString("ja-JP", {timeZone: "Asia/Tokyo"}) : "なし"}）
-                </li>)}</ul>
+              <summary>
+                {t("収集状態")} {collectionEnabled ? "" : t("（一時停止中）")}
+              </summary>
+              {sources.length === 0 ? (
+                <p>{t("保存対象が未設定です。")}</p>
+              ) : (
+                <ul>
+                  {sources.map((source) => (
+                    <li key={source.id}>
+                      {source.browser_type} {source.profile_name}：
+                      {source.state === "complete"
+                        ? t("取得完了")
+                        : source.state === "collecting"
+                          ? t("取り込み中")
+                          : source.state === "waiting"
+                            ? t("ブラウザの履歴を読み取れるまで待機中")
+                            : source.state === "failed"
+                              ? t("取得失敗")
+                              : t("未完了")}
+                      ({lang === "ja" ? "保存件数" : "Saved visits"}{" "}
+                      {source.count},{" "}
+                      {lang === "ja" ? "最終成功" : "Last collected"}{" "}
+                      {source.last_success
+                        ? new Date(source.last_success * 1000).toLocaleString(
+                            lang,
+                            { timeZone: "Asia/Tokyo" },
+                          )
+                        : t("なし")}
+                      )
+                    </li>
+                  ))}
+                </ul>
               )}
             </details>
           )}
-          <nav aria-label="日付移動">
+          <nav aria-label={t("日付移動")}>
             <button
               disabled={!view.start}
               onClick={() =>
@@ -540,13 +610,13 @@ function App() {
                 })
               }
             >
-              ← 前日
+              {t("← 前日")}
             </button>
             <button
               disabled={!today}
               onClick={() => navigate({ start: today, end: today, q: "" })}
             >
-              今日
+              {t("今日")}
             </button>
             <span>{zone}</span>
             <button
@@ -559,23 +629,25 @@ function App() {
                 })
               }
             >
-              翌日 →
+              {t("翌日 →")}
             </button>
           </nav>
         </section>
-        <section aria-label="履歴一覧" aria-busy={busy}>
+        <section aria-label={t("履歴一覧")} aria-busy={busy}>
           <div className="list-heading">
             <h2>
               {view.q
-                ? `「${view.q}」の検索結果`
+                ? lang === "ja"
+                  ? `「${view.q}」の検索結果`
+                  : `Results for “${view.q}”`
                 : view.start === view.end
                   ? view.start
                   : `${view.start} — ${view.end}`}
             </h2>
             <label className="page-size">
-              件数
+              {t("件数")}
               <select
-                aria-label="1回の表示件数"
+                aria-label={t("1回の表示件数")}
                 value={pageSize}
                 onChange={(e) => {
                   save();
@@ -601,21 +673,27 @@ function App() {
                 void load(false);
               }}
             >
-              再読み込み
+              {t("再読み込み")}
             </button>
           </div>
           {error && (
             <div role="alert" className="error">
-              {error}
+              {t(error)}
             </div>
           )}
           {!busy && !error && !rows.length && (
             <div className="empty">
               {empty
-                ? sources?.length === 0 ? "保存対象が未設定です" : !collectionEnabled ? "取り込みは一時停止中です" : sources?.some((s) => s.state !== "complete") ? "取り込みは完了していません" : "参照できる履歴がありません"
+                ? sources?.length === 0
+                  ? t("保存対象が未設定です")
+                  : !collectionEnabled
+                    ? t("取り込みは一時停止中です")
+                    : sources?.some((s) => s.state !== "complete")
+                      ? t("取り込みは完了していません")
+                      : t("参照できる履歴がありません")
                 : !view.q && view.start === today && view.end === today
-                  ? "今日の履歴はまだ取り込まれていません"
-                  : "該当する履歴がありません"}
+                  ? t("今日の履歴はまだ取り込まれていません")
+                  : t("該当する履歴がありません")}
             </div>
           )}
           <ol className="records">
@@ -633,8 +711,8 @@ function App() {
                     source={icons[row.site || ""]}
                   />
                   <span className="record-text">
-                    <strong>{row.title || "（タイトルなし）"}</strong>
-                    <span>{row.site || "サイト情報なし"}</span>
+                    <strong>{row.title || t("（タイトルなし）")}</strong>
+                    <span>{row.site || t("サイト情報なし")}</span>
                   </span>
                   <span aria-hidden="true">›</span>
                 </button>
@@ -643,53 +721,64 @@ function App() {
           </ol>
           {busy && (
             <p role="status" className="empty">
-              読み込み中…
+              {t("読み込み中…")}
             </p>
           )}
           {cursor && !busy && (
             <button className="more" onClick={() => void load(true)}>
-              さらに読み込む
+              {t("さらに読み込む")}
             </button>
           )}
         </section>
       </main>
       {detail && (
-        <div className="overlay" onClick={closeDetail}>
-          <section
-            className="details"
-            role="dialog"
-            aria-modal="true"
-            aria-label="履歴の詳細"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <button autoFocus className="close" onClick={closeDetail}>
-              閉じる ×
-            </button>
-            <h2>{detail.title || "（タイトルなし）"}</h2>
-            <dl>
-              <dt>日時</dt>
-              <dd>
-                {detail.day} {detail.time.slice(11, 19)} ({zone})
-              </dd>
-              <dt>ブラウザ</dt>
-              <dd>
-                {detail.browser_type} {detail.profile_name}
-              </dd>
-              <dt>端末</dt>
-              <dd>{detail.device || "端末情報なし"}</dd>
-              <dt>URL</dt>
-              <dd>
-                {safeUrl ? (
-                  <a href={safeUrl} target="_blank" rel="noopener noreferrer">
-                    {detail.url} ↗
-                  </a>
-                ) : (
-                  detail.url
-                )}
-              </dd>
-            </dl>
-          </section>
-        </div>
+        <dialog
+          ref={dialog}
+          onCancel={closeDetail}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              const b = e.currentTarget.getBoundingClientRect();
+              if (
+                e.clientX < b.left ||
+                e.clientX > b.right ||
+                e.clientY < b.top ||
+                e.clientY > b.bottom
+              )
+                closeDetail();
+            }
+          }}
+          className="details"
+          role="dialog"
+          aria-modal="true"
+          aria-label={t("履歴の詳細")}
+        >
+          <button autoFocus className="close" onClick={closeDetail}>
+            {t("閉じる ×")}
+          </button>
+          <h2>{detail.title || t("（タイトルなし）")}</h2>
+          <dl>
+            <dt>{t("日時")}</dt>
+            <dd>
+              {detail.day} {detail.time.slice(11, 19)} ({zone})
+            </dd>
+            <dt>{t("ブラウザ")}</dt>
+            <dd>
+              {detail.browser_type} {detail.profile_name}
+            </dd>
+            <dt>{t("端末")}</dt>
+            <dd>{detail.device || t("端末情報なし")}</dd>
+            <dt>URL</dt>
+            <dd>
+              {safeUrl ? (
+                <a href={safeUrl} target="_blank" rel="noopener noreferrer">
+                  {detail.url} ↗
+                </a>
+              ) : (
+                detail.url
+              )}
+            </dd>
+          </dl>
+        </dialog>
       )}
     </>
   );

@@ -66,6 +66,7 @@ public final class AgentService: @unchecked Sendable {
         var displayName: String
         var extensionVersion: String?
         var lastSeen: Date
+        var heldCount: Int?
         var cloudTracking: Bool
     }
 
@@ -429,6 +430,7 @@ public final class AgentService: @unchecked Sendable {
             displayName: existingName ?? "\(family.capitalized) profile \(familyOrdinal)",
             extensionVersion: message.extensionVersion,
             lastSeen: now,
+            heldCount: message.heldCount.flatMap { $0 >= 0 ? $0 : nil },
             cloudTracking: message.capabilities?.contains("cloud-delivery-v1") == true
         )
     }
@@ -475,7 +477,7 @@ public final class AgentService: @unchecked Sendable {
                 displayName: observed.displayName,
                 extensionVersion: observed.extensionVersion,
                 lastSeen: observed.lastSeen,
-                active: profileID == activeProfileID
+                active: profileID == activeProfileID, heldCount: observed.heldCount
             )
         }.sorted { lhs, rhs in
             if lhs.active != rhs.active { return lhs.active }

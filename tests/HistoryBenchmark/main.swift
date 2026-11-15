@@ -18,7 +18,7 @@ do {
     fflush(stdout)
     let timer = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "benchmark.collection"))
     timer.schedule(deadline: .now() + 30, repeating: 30)
-    timer.setEventHandler { try? collector.collectAll() }
+    timer.setEventHandler { @Sendable in try? collector.collectAll() }
     timer.resume()
     dispatchMain()
 } catch {

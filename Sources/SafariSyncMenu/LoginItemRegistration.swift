@@ -5,8 +5,8 @@ enum LoginItemRegistration {
     enum Result: Equatable { case ready, requiresApproval }
 
     struct Unavailable: LocalizedError {
-        var errorDescription: String? { "Open at Login could not be registered." }
-        var recoverySuggestion: String? { "Add Safari Chromium History Sync in System Settings → General → Login Items & Extensions." }
+        var errorDescription: String? { NSLocalizedString("Open at Login could not be registered.", comment: "") }
+        var recoverySuggestion: String? { NSLocalizedString("Add Safari Chromium History Sync in System Settings → General → Login Items & Extensions.", comment: "") }
     }
 
     /// `notFound` is also returned for an app that has never been registered.

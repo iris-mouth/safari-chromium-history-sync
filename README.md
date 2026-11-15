@@ -67,22 +67,18 @@ selections are independent of the single browser profile used for sync. Pausing
 collection keeps the collected records; removing a source removes its records
 from the viewer, without deleting the browser's history.
 
-In **Configure Web Viewer…**, enable the viewer and enter your Tailscale login
-and the HTTPS root URL for this Mac's Tailscale name. Configure Tailscale Serve
-to forward that URL to the local viewer on `127.0.0.1:8766`. For example, when
-HTTPS port 443 is available or you have deliberately chosen to replace its
-existing mapping:
+Build 626 embeds the Agent inside the main application. **Show Agent for Full Disk Access** reveals the exact helper to grant permission to. When upgrading, quit the old menu app and reload the bundled extension in each configured profile. While Chrome or Edge has an exclusive database lock, the last confirmed records remain visible until a read transaction succeeds.
+
+Enable the viewer in **Configure Web Viewer…** with the owner's Tailscale login and the HTTPS root URL. The gateway obtains a certificate for that host and checks the forwarded client identity with Tailscale. For a dedicated HTTPS port, configure raw TCP forwarding with PROXY protocol v2. Check the existing mapping before replacing it.
 
 ```sh
 tailscale serve status
-tailscale serve --bg --https=443 http://127.0.0.1:8766
+tailscale serve --bg --proxy-protocol=2 --tcp=443 tcp://127.0.0.1:8767
 ```
 
-Connect the other device to Tailscale using the same account, then open the
-configured HTTPS URL. The viewer accepts requests for the configured Tailscale
-login. **Open History on the Web** opens that URL on the Mac. Sync, collection
-and the viewer have separate controls; quitting the menu app stops its Agent
-and viewer. The app can be configured to start again at login.
+Open the HTTPS URL from a device signed in as the configured Tailscale owner. The viewer's language selector applies to the current browser. Closing the menu app stops the gateway, viewer and Agent.
+
+**日本語**　更新前にメニューから終了し、インストール後に本体を開いてください。「フルディスクアクセス用の Agent を Finder に表示」で内蔵 Agent を選べます。設定した各プロフィールで拡張を再読み込みしてください。「Web Viewer を設定…」でログイン名と HTTPS URL を保存します。指定した Tailscale アカウントで接続すると、ブラウザから直接履歴を開けます。日付の基準は日本語・英語ともに東京です。
 
 ## Limits
 

@@ -19,6 +19,7 @@ node --check "$ROOT/extension/sync_controller.js"
 node --check "$ROOT/extension/chrome_generation_store.js"
 node --check "$ROOT/extension/worker.js"
 npm --prefix "$ROOT" test
+go test "$ROOT/gateway/main.go" "$ROOT/gateway/main_test.go"
 swift run --disable-sandbox --package-path "$ROOT" --scratch-path "$CHECK_TMP/build" SafariSyncCoreIntegrationTests
 "$ROOT/scripts/check-menu.sh"
 

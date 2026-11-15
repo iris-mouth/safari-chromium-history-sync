@@ -40,6 +40,16 @@ public final class HistoryHTTPServer: @unchecked Sendable {
             DispatchQueue.global(qos: .utility).async { [self] in acceptLoop(fd) }
         }
     }
+    public func start(inheritedUnixListener fd: Int32) throws {
+        var address = sockaddr_storage()
+        var length = socklen_t(MemoryLayout<sockaddr_storage>.size)
+        let result = withUnsafeMutablePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &length) }
+        }
+        guard result == 0, address.ss_family == AF_UNIX else { throw HistoryReaderError.unavailable }
+        lock.withLock { listener = fd }
+        DispatchQueue.global(qos: .utility).async { [self] in acceptLoop(fd) }
+    }
     public func stop() {
         lock.withLock {
             if listener >= 0 { shutdown(listener, SHUT_RDWR); Darwin.close(listener); listener = -1 }

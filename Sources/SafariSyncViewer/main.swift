@@ -7,13 +7,18 @@ func option(_ name: String) -> String? {
     return args[index + 1]
 }
 guard let database = option("--database"), let assets = option("--assets"),
-      let owner = option("--owner"), let portString = option("--port"), let port = UInt16(portString), port > 0 else {
+      let owner = option("--owner") else {
     FileHandle.standardError.write(Data("Usage: SafariSyncViewer --database PATH --assets PATH --owner TAILSCALE_LOGIN --port PORT\n".utf8))
     exit(64)
 }
 do {
     let server = try HistoryHTTPServer(reader: HistoryReader(databasePath: database), assets: URL(fileURLWithPath: assets), owner: owner)
-    try server.start(port: port)
+    if let fd = option("--listen-fd").flatMap(Int32.init), fd >= 3 {
+        try server.start(inheritedUnixListener: fd)
+    } else if !Bundle.main.bundleURL.path.hasSuffix(".app"), let port = option("--port").flatMap(UInt16.init), port > 0 {
+        // Command-line fixture server used by the synthetic browser tests.
+        try server.start(port: port)
+    } else { exit(64) }
     if args.contains("--owned-stdin") {
         // Menu holds the write end; EOF also arrives if the Menu crashes.
         DispatchQueue.global(qos: .utility).async {
