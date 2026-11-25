@@ -6,4 +6,4 @@ Before and after reload, two legacy generations contained zero unverifiable or h
 
 TCC logs attributed Agent reads to the parent app and rejected its stale signature registration. Re-registering the parent fixed access. With the embedded Agent permission disabled and the app restarted, Safari completed a new scan. Temporarily quitting Edge allowed its scan to complete too; Edge was reopened. Parent-only Full Disk Access is verified on this Mac.
 
-Agent was ready, Viewer returned HTTP 200, sync remained off, and the Safari cursor was unchanged (identity mismatch, matching anchor). Open-browser extension collection and actual logout/login restoration are separate checks; logout/login remains deferred.
+Agent was ready, Viewer returned HTTP 200, sync remained off, and the Safari cursor was unchanged (identity mismatch, matching anchor). On November 25, connecting the selected Edge profile enabled extension collection: one uniquely marked test visit appeared in the viewing DB while Edge remained open. The test visit remains in browser history. Actual logout/login restoration remains deferred.
