@@ -4,7 +4,7 @@
 "Resolve Sync Issue…" = "Resolve Sync Issue…";
 "Web Viewer Unavailable" = "Web Viewer Unavailable";
 "Check the viewer settings and whether local port 8767 is already in use." = "Check the viewer settings and whether local port 8767 is already in use.";
-"Show Agent for Full Disk Access" = "Show Agent for Full Disk Access";
+"Show App for Full Disk Access" = "Show App for Full Disk Access";
 "View Sync Status…" = "View Sync Status…";
 "Configure Safari Sync Assist…" = "Configure Safari Sync Assist…";
 "Configure History Collection…" = "Configure History Collection…";
@@ -177,7 +177,7 @@
 "Syncing with %@." = "Syncing with %@.";
 "Syncing · %@" = "Syncing · %@";
 "Check Full Disk Access for %@ in System Settings. Then restart the sync service using Set Up Extensions & Login… in the menu." = "Check Full Disk Access for %@ in System Settings. Then restart the sync service using Set Up Extensions & Login… in the menu.";
-"\n\nCould not read profiles for %@. Check Full Disk Access for the Agent." = "\n\nCould not read profiles for %@. Check Full Disk Access for the Agent.";
+"\n\nCould not read profiles for %@. Check Full Disk Access for Safari Chromium History Sync.app." = "\n\nCould not read profiles for %@. Check Full Disk Access for Safari Chromium History Sync.app.";
 " — %@, %@ saved, last success: %@" = " — %@, %@ saved, last success: %@";
 "Browser to sync: %@" = "Browser to sync: %@";
 "Pending browser deliveries: %@\nWaiting for automatic retry: %@" = "Pending browser deliveries: %@\nWaiting for automatic retry: %@";

@@ -15,7 +15,7 @@ with the actual logout/login check deferred.
 - [x] React UI port and desktop/mobile Playwright coverage; source state shown.
 - [x] Menu controls for collection sources, sync/collection/viewer switches,
   manual collection and Web opening; menu quit requests Agent and Viewer exit.
-- [x] The owner chose to discard legacy outbound extension entries without source visit identity. The updated worker removes these and previously held entries on its next exchange. This cleanup is covered by a synthetic test and postdates 631-r3.
+- [x] The owner chose to discard legacy outbound extension entries without source visit identity. The updated worker removes these and previously held entries on its next exchange. Extension 632 was installed and reloaded in Edge; no discardable real entries were present, and identifiable entries were retained. See [extension 632 validation](validation/extension-632.md) for the synthetic deletion test and device evidence.
 - [x] Synthetic Collector → Reader → HTTP tests, existing sync/extension tests,
   and local 100,000/1,000,000-record measurements. See `docs/validation/`.
 - [x] Isolated Agent and Viewer processes restored settings after restart,

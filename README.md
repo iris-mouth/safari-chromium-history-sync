@@ -24,21 +24,20 @@ shasum -a 256 -c SHA256SUMS.txt
 The installer is unsigned and the apps are ad-hoc signed, without Apple
 notarization. See the [release notes](docs/RELEASE-v6.1.4.md) before installing.
 
-## Install
+## Install the development build
 
-1. Install the PKG. It places the app and its Agent in `/Applications`.
+1. Install the PKG. It places one app in `/Applications`, with internal helpers.
 2. Open **Safari Chromium History Sync**, then open **Settings… → General**.
 3. Select Chrome Stable, Edge Stable, or both, then click **Register and open extension pages**.
 4. Setup opens each selected browser's extensions page and reveals the bundled
    `ChromiumExtension` folder. Enable **Developer mode**, choose **Load unpacked**,
    and select that folder.
 5. Approve **Open at Login** if requested. Grant **Full Disk Access** only to
-   **Safari Chromium History Sync Agent.app**.
+   **Safari Chromium History Sync.app**.
 6. In the development build, select a profile under **Settings… → History Collection**, enable collection, then choose **Browser Sync → Connect Selected Profile**. After initial collection completes, enable browser sync if desired.
 
 When upgrading, quit the menu app, install the new PKG, reopen the app, and reload
-its unpacked browser extension. macOS may ask you to restore the Agent's existing
-permissions. Stop the legacy Python writer before using version 6.
+its unpacked browser extension. macOS may ask you to restore the parent app's Full Disk Access registration after its ad-hoc signature changes. Stop the legacy Python writer before using version 6.
 
 ## Use
 
@@ -58,10 +57,9 @@ prove arrival.
 
 The development PKG adds a separate history collector and Web viewer; these are
 not included in the v6.1.4 release linked above. Grant Full Disk Access to
-**Safari Chromium History Sync Agent.app**, then use **Configure History
-Collection…** to collect Safari and one Chrome or Edge profile. The Agent routes new visits from this database when browser sync is enabled. Pausing collection also pauses sync. Switching profiles removes the previous Chromium records from the Viewer and cancels pending deliveries after confirmation. Browser history and Safari’s collected records are preserved.
+**Safari Chromium History Sync.app**, then use **Settings… → History Collection** to collect Safari and one Chrome or Edge profile. The Agent routes new visits from this database when browser sync is enabled. Pausing collection also pauses sync. Switching profiles removes the previous Chromium records from the Viewer and cancels pending deliveries after confirmation. Browser history and Safari’s collected records are preserved.
 
-Build 626 embeds the Agent inside the main application. **Show Agent for Full Disk Access** reveals the exact helper to grant permission to. When upgrading, quit the old menu app and reload the bundled extension in each configured profile. While Chrome or Edge has an exclusive database lock, the last confirmed records remain visible until a read transaction succeeds.
+**Show App for Full Disk Access** reveals the parent app to authorize. Separate permission for the embedded Agent is unnecessary on the validated Mac. While Chrome or Edge holds an exclusive database lock, existing records remain visible; connect the selected profile’s extension for new visits while the browser is open.
 
 Enable the viewer in **Settings… → Web Viewer** with the owner's Tailscale login and the HTTPS root URL. The gateway obtains a certificate for that host and checks the forwarded client identity with Tailscale. For a dedicated HTTPS port, configure raw TCP forwarding with PROXY protocol v2. Check the existing mapping before replacing it.
 
@@ -72,7 +70,7 @@ tailscale serve --bg --proxy-protocol=2 --tcp=443 tcp://127.0.0.1:8767
 
 Open the HTTPS URL from a device signed in as the configured Tailscale owner. The viewer's language selector applies to the current browser. Closing the menu app stops the gateway, viewer and Agent.
 
-**日本語**　更新前にメニューから終了し、インストール後に本体を開いてください。「フルディスクアクセス用の Agent を Finder に表示」で内蔵 Agent を選べます。設定した各プロフィールで拡張を再読み込みしてください。「Web Viewer を設定…」でログイン名と HTTPS URL を保存します。指定した Tailscale アカウントで接続すると、ブラウザから直接履歴を開けます。日付の基準は日本語・英語ともに東京です。
+**日本語**　更新前にメニューから終了し、インストール後に本体を開いてください。フルディスクアクセスは親アプリに許可します。内蔵 Agent への個別許可は不要です。設定した各プロフィールで拡張を再読み込みしてください。「設定… → Web Viewer」でログイン名と HTTPS URL を保存します。指定した Tailscale アカウントで接続すると、ブラウザから直接履歴を開けます。日付の基準は日本語・英語ともに東京です。
 
 ## Limits
 

@@ -92,7 +92,7 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         stack.addArrangedSubview(start)
         updateSetupButton()
         stack.addArrangedSubview(setupFeedback)
-        stack.addArrangedSubview(NSButton(title: NSLocalizedString("Show Agent for Full Disk Access", comment: ""), target: self, action: #selector(revealAgent)))
+        stack.addArrangedSubview(NSButton(title: NSLocalizedString("Show App for Full Disk Access", comment: ""), target: self, action: #selector(revealApp)))
         let compatibility = NSTextField(labelWithString: NSLocalizedString("Compatibility on This Mac", comment: ""))
         compatibility.font = .boldSystemFont(ofSize: 14)
         stack.addArrangedSubview(compatibility)
@@ -294,7 +294,7 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         alert.messageText = message(for: issue)
         switch issue {
         case AgentIssueCode.safariAccessUnavailable:
-            alert.informativeText = String(format: NSLocalizedString("Check Full Disk Access for %@ in System Settings. Then restart the sync service using Set Up Extensions & Login… in the menu.", comment: ""), String(describing: ProductIdentity.agentBundleName))
+            alert.informativeText = String(format: NSLocalizedString("Check Full Disk Access for %@ in System Settings. Then restart the sync service using Set Up Extensions & Login… in the menu.", comment: ""), String(describing: ProductIdentity.productName))
             alert.addButton(withTitle: NSLocalizedString("Open Access Settings", comment: ""))
             alert.addButton(withTitle: NSLocalizedString("Later", comment: ""))
             if alert.runModal() == .alertFirstButtonReturn,
@@ -634,7 +634,7 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    @objc private func revealAgent() { NSWorkspace.shared.activateFileViewerSelecting([agentURL()]) }
+    @objc private func revealApp() { NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL]) }
 
     @objc private func openWeb() {
         guard UserDefaults.standard.bool(forKey: "viewerEnabled"),

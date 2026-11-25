@@ -4,7 +4,7 @@
 "Resolve Sync Issue…" = "同期の問題を解決…";
 "Web Viewer Unavailable" = "Viewer を起動できません";
 "Check the viewer settings and whether local port 8767 is already in use." = "Viewer の設定と、ローカルポート 8767 の使用状況を確認してください。";
-"Show Agent for Full Disk Access" = "フルディスクアクセス用の Agent を Finder に表示";
+"Show App for Full Disk Access" = "フルディスクアクセス用のアプリを Finder に表示";
 "View Sync Status…" = "同期状態を表示…";
 "Configure Safari Sync Assist…" = "Safari 同期アシストを設定…";
 "Configure History Collection…" = "履歴の収集を設定…";
@@ -177,7 +177,7 @@
 "Syncing with %@." = "%@ と同期しています。";
 "Syncing · %@" = "同期中・%@";
 "Check Full Disk Access for %@ in System Settings. Then restart the sync service using Set Up Extensions & Login… in the menu." = "システム設定で %@ のフルディスクアクセスを確認し、メニューから同期サービスを再起動してください。";
-"\n\nCould not read profiles for %@. Check Full Disk Access for the Agent." = "\n\n%@ のプロフィールを読み取れません。Agent のフルディスクアクセスを確認してください。";
+"\n\nCould not read profiles for %@. Check Full Disk Access for Safari Chromium History Sync.app." = "\n\n%@ のプロフィールを読み取れません。Safari Chromium History Sync.app のフルディスクアクセスを確認してください。";
 " — %@, %@ saved, last success: %@" = " — %@、保存 %@ 件、最終成功：%@";
 "Browser to sync: %@" = "同期するブラウザ：%@";
 "Pending browser deliveries: %@\nWaiting for automatic retry: %@" = "ブラウザへの送信待ち：%@\n自動再試行待ち：%@";
