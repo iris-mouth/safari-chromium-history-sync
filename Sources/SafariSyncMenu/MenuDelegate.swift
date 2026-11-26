@@ -4,7 +4,7 @@ import SafariSyncCore
 import ServiceManagement
 
 @MainActor
-final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate {
     private let agentBundleIdentifier = ProductIdentity.agentBundleIdentifier
     private let setupCoordinator = SetupCoordinator()
     private var statusItem: NSStatusItem?
@@ -16,22 +16,33 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let viewerFeedback = NSTextField(wrappingLabelWithString: "")
     private var browserCheckboxes: [SupportedBrowser: NSButton] = [:]
     private var setupStartButton: NSButton?
-    private var latestHealth: HealthSnapshot?
+    private var latestHealth: HealthSnapshot? { statusSnapshot?.sync }
     private var cloudWindow: CloudDiagnosticsWindow?
     private var statusSnapshot: MenuStatusSnapshot?
     private var statusLoading = true
     private var statusTask: Task<Void, Never>?
     private let requestOverride: ((MenuCommand) async throws -> Data)?
     private var agentRestarting = false
-    private var collectionItems: StatusMenuItems?
-    private var syncItems: StatusMenuItems?
-    private var viewerItems: StatusMenuItems?
-
-    private struct StatusMenuItems {
-        let title: NSMenuItem
-        let details: [NSMenuItem]
-        let actions: [MenuStatusPresentation.Action: NSMenuItem]
-    }
+    private var openHistoryItem: NSMenuItem?
+    private var collectionItem: NSMenuItem?
+    private var syncItem: NSMenuItem?
+    private var viewerItem: NSMenuItem?
+    private var settingsStatusTask: Task<Void, Never>?
+    private var collectionFormLoading = false
+    private var collectBusy = false
+    private var syncBusy = false
+    private var assistBusy = false
+    private var connectBusy = false
+    private let collectionStatusLabel = NSTextField(wrappingLabelWithString: "")
+    private let syncStatusLabel = NSTextField(wrappingLabelWithString: "")
+    private let viewerStatusLabel = NSTextField(wrappingLabelWithString: "")
+    private let syncIssueLabel = NSTextField(wrappingLabelWithString: "")
+    private let collectButton = NSButton()
+    private let restartButton = NSButton()
+    private let connectButton = NSButton()
+    private let viewerRetryButton = NSButton()
+    private let collectionGeneralButton = NSButton()
+    private let syncGeneralButton = NSButton()
 
     private struct ViewerSession {
         let id: UUID
@@ -73,6 +84,7 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        settingsStatusTask?.cancel()
         if let viewer = stopViewer() {
             for _ in 0..<20 where viewer.isRunning { usleep(100_000) }
             if viewer.isRunning { kill(viewer.processIdentifier, SIGKILL) }
@@ -84,65 +96,40 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let menu = NSMenu()
         menu.delegate = self
         menu.autoenablesItems = false
-        collectionItems = addStatusItems(to: menu, details: 5, actions: [
-            (.access, "Open Full Disk Access Settings…", #selector(openAccessSettings)),
-            (.collect, "Collect History Now", #selector(collectNow)),
-            (.collectionSettings, "Collection Settings…", #selector(openCollectionSettings)),
-            (.syncSettings, "Browser Sync Settings…", #selector(openSyncSettings)),
-            (.restartAgent, "Restart History Service", #selector(restartAgent)),
-        ])
+        func item(_ title: String, _ action: Selector, _ key: String = "") -> NSMenuItem {
+            let item = menu.addItem(withTitle: NSLocalizedString(title, comment: ""), action: action, keyEquivalent: key)
+            item.target = self
+            return item
+        }
+        openHistoryItem = item("Open History", #selector(openWeb))
         menu.addItem(.separator())
-        syncItems = addStatusItems(to: menu, details: 3, actions: [
-            (.access, "Open Full Disk Access Settings…", #selector(openAccessSettings)),
-            (.resolveSync, "Resolve Sync Issue…", #selector(resolveBlockedIssue)),
-            (.syncSettings, "Browser Sync Settings…", #selector(openSyncSettings)),
-            (.restartAgent, "Restart History Service", #selector(restartAgent)),
-        ])
+        collectionItem = item("", #selector(openCollectionSettings))
+        syncItem = item("", #selector(openSyncSettings))
+        viewerItem = item("", #selector(openViewerSettings))
         menu.addItem(.separator())
-        viewerItems = addStatusItems(to: menu, details: 2, actions: [
-            (.openHistory, "Open History", #selector(openWeb)),
-            (.retryViewer, "Retry Web Viewer", #selector(retryViewer)),
-            (.viewerSettings, "Viewer Settings…", #selector(openViewerSettings)),
-        ])
-        menu.addItem(.separator())
-        menu.addItem(withTitle: NSLocalizedString("Settings…", comment: ""), action: #selector(showSettings), keyEquivalent: ",").target = self
-        menu.addItem(.separator())
-        menu.addItem(withTitle: NSLocalizedString("Quit History Sync", comment: ""), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q").target = NSApp
+        _ = item("Settings…", #selector(showSettings), ",")
+        item("Quit History Sync", #selector(NSApplication.terminate(_:)), "q").target = NSApp
         renderStatus()
         return menu
     }
 
-    private func addStatusItems(to menu: NSMenu, details: Int,
-                                actions: [(MenuStatusPresentation.Action, String, Selector)]) -> StatusMenuItems {
-        let title = menu.addItem(withTitle: "", action: nil, keyEquivalent: "")
-        title.isEnabled = false
-        let detailItems = (0..<details).map { _ in
-            let item = menu.addItem(withTitle: "", action: nil, keyEquivalent: "")
-            item.indentationLevel = 1
-            item.isEnabled = false
-            return item
-        }
-        let actionItems = actions.map { action, label, selector in
-            let item = menu.addItem(withTitle: NSLocalizedString(label, comment: ""), action: selector, keyEquivalent: "")
-            item.target = self
-            item.indentationLevel = 1
-            return (action, item)
-        }
-        return .init(title: title, details: detailItems, actions: Dictionary(uniqueKeysWithValues: actionItems))
-    }
-
     private func renderStatus() {
         let status = MenuStatusPresentation(snapshot: statusSnapshot, viewer: viewerReadiness, loading: statusLoading)
-        for (row, items) in [(status.collection, collectionItems), (status.sync, syncItems), (status.viewer, viewerItems)] {
-            guard let items else { continue }
-            items.title.title = row.title
-            items.title.attributedTitle = NSAttributedString(string: row.title, attributes: [.font: NSFont.boldSystemFont(ofSize: NSFont.systemFontSize)])
-            for (index, detail) in items.details.enumerated() {
-                detail.isHidden = index >= row.details.count
-                if !detail.isHidden { detail.title = row.details[index] }
-            }
-            for (action, item) in items.actions { item.isHidden = !row.actions.contains(action) }
+        for (row, item, label) in [(status.collection, collectionItem, collectionStatusLabel),
+                                   (status.sync, syncItem, syncStatusLabel),
+                                   (status.viewer, viewerItem, viewerStatusLabel)] {
+            item?.title = row.title
+            label.stringValue = ([row.title] + row.details).joined(separator: "\n")
         }
+        openHistoryItem?.isEnabled = status.canOpenHistory
+        collectButton.isEnabled = statusSnapshot?.collection?.enabled == true && !collectBusy
+            && statusSnapshot?.collection?.sources.contains(where: { $0.state == "collecting" }) != true
+        collectionGeneralButton.isHidden = !status.collection.attention
+        restartButton.isEnabled = !agentRestarting && !setupBusy
+        if case .unavailable = viewerReadiness { viewerRetryButton.isHidden = false }
+        else { viewerRetryButton.isHidden = true }
+        viewerRetryButton.isEnabled = !viewerChanging
+        updateSyncSettings()
         let attention = status.collection.attention || status.sync.attention || status.viewer.attention
         let description = attention ? NSLocalizedString("History Sync · Needs Attention", comment: "")
             : NSLocalizedString(ProductIdentity.menuBarLabel, comment: "")
@@ -168,7 +155,7 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Task { await refreshStatusAsync() }
     }
 
-    private let generalInfo = NSTextField(wrappingLabelWithString: "")
+    private let compatibilityInfo = NSTextField(wrappingLabelWithString: "")
     private let setupFeedback = NSTextField(wrappingLabelWithString: "")
     private let recoveryButton = NSButton()
     private var setupBusy = false
@@ -190,17 +177,15 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         updateSetupButton()
         stack.addArrangedSubview(setupFeedback)
         stack.addArrangedSubview(NSButton(title: NSLocalizedString("Show App for Full Disk Access", comment: ""), target: self, action: #selector(revealApp)))
-        let compatibility = NSTextField(labelWithString: NSLocalizedString("Compatibility on This Mac", comment: ""))
-        compatibility.font = .boldSystemFont(ofSize: 14)
-        stack.addArrangedSubview(compatibility)
-        stack.addArrangedSubview(generalInfo)
-        for field in [generalInfo, setupFeedback] { field.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true }
-        recoveryButton.target = self
-        recoveryButton.action = #selector(resolveBlockedIssue)
-        recoveryButton.title = NSLocalizedString("Resolve Sync Issue…", comment: "")
-        recoveryButton.isHidden = true
-        stack.addArrangedSubview(recoveryButton)
+        stack.addArrangedSubview(NSButton(title: NSLocalizedString("Open Full Disk Access Settings…", comment: ""), target: self, action: #selector(openAccessSettings)))
+        stack.addArrangedSubview(NSButton(title: NSLocalizedString("Open Login Item Settings…", comment: ""), target: self, action: #selector(openLoginSettings)))
+        restartButton.title = NSLocalizedString("Restart History Service", comment: "")
+        restartButton.target = self
+        restartButton.action = #selector(restartAgent)
+        stack.addArrangedSubview(restartButton)
     }
+
+    @objc private func openLoginSettings() { SMAppService.openSystemSettingsLoginItems() }
 
     @objc private func showSetup() {
         let selected = Set(browserCheckboxes.compactMap { browser, checkbox in
@@ -220,6 +205,7 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func updateSetupButton() {
         setupStartButton?.isEnabled = !setupBusy && browserCheckboxes.values.contains { $0.state == .on }
+        restartButton.isEnabled = !agentRestarting && !setupBusy
     }
 
     private func runSetup(selectedBrowsers: Set<SupportedBrowser>) async {
@@ -236,9 +222,7 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             for browser in selectedBrowsers { setupCoordinator.openExtensionsPage(for: browser) }
             setupFeedback.stringValue = NSLocalizedString("On the browser's extensions page, enable Developer mode, choose Load unpacked, and select the ChromiumExtension folder shown in Finder.", comment: "")
-            latestHealth = await waitForHealth()
-            generalInfo.stringValue = compatibilityDescription()
-            recoveryButton.isHidden = latestHealth?.issueCode == nil
+            _ = await waitForHealth()
             await refreshStatusAsync()
         } catch { setupFeedback.stringValue = error.localizedDescription }
     }
@@ -307,8 +291,11 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let data = try? await requestAsync(MenuCommand(operation: "menuStatus"))
             statusSnapshot = data.flatMap { try? JSONDecoder().decode(MenuStatusSnapshot.self, from: $0) }
             statusLoading = statusSnapshot?.sync?.runtimeState == "initializing"
-            latestHealth = statusSnapshot?.sync
             renderStatus()
+            if settingsWindow?.isVisible == true {
+                if loadedRevision == nil { await loadCollectionForm() }
+                await refreshPairLabel()
+            }
         }
         statusTask = task
         await task.value
@@ -323,8 +310,9 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func restartAgent() {
         guard !agentRestarting, !setupBusy else { return }
         agentRestarting = true
+        renderStatus()
         Task {
-            defer { agentRestarting = false }
+            defer { agentRestarting = false; renderStatus() }
             do {
                 try await launchAgent(forceRestart: true)
                 _ = await waitForHealth()
@@ -337,21 +325,27 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var assistProfile: String?
 
     @objc private func configureSafariAssist() {
-        guard let profile = assistProfile else { return }
+        guard let profile = assistProfile, !assistBusy else { return }
+        assistBusy = true
         let result = assistControl.state == .on ? "enable" : "disable"
         assistControl.isEnabled = false
         Task {
+            defer { assistBusy = false }
             do {
                 try await checkCommand(MenuCommand(operation: "cloudSafariAssist", profileID: profile, result: result))
                 syncFeedback.stringValue = ""
                 await refreshStatusAsync()
             } catch { syncFeedback.stringValue = error.localizedDescription }
+            assistBusy = false
             await refreshPairLabel()
         }
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
-        if settingsWindow?.isVisible == true { Task { await refreshPairLabel() } }
+        if settingsWindow?.isVisible == true {
+            requestViewerReadiness()
+            Task { await refreshStatusAsync() }
+        }
     }
 
 
@@ -401,7 +395,7 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         alert.messageText = message(for: issue)
         switch issue {
         case AgentIssueCode.safariAccessUnavailable:
-            alert.informativeText = String(format: NSLocalizedString("Check Full Disk Access for %@ in System Settings. Then restart the sync service using Set Up Extensions & Login… in the menu.", comment: ""), String(describing: ProductIdentity.productName))
+            alert.informativeText = String(format: NSLocalizedString("Check Full Disk Access for %@ in System Settings, then restart the history service in Settings → General.", comment: ""), String(describing: ProductIdentity.productName))
             alert.addButton(withTitle: NSLocalizedString("Open Access Settings", comment: ""))
             alert.addButton(withTitle: NSLocalizedString("Later", comment: ""))
             if alert.runModal() == .alertFirstButtonReturn { openAccessSettings() }
@@ -423,14 +417,13 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 Task { await runRecoveryCommand(RecoveryCommandPolicy.resetAgentState) }
             }
         case AgentIssueCode.keychainUnavailable:
-            alert.informativeText = NSLocalizedString("Check the Keychain lock and access permissions, then restart the sync service using Set Up Extensions & Login… in the menu.", comment: "")
+            alert.informativeText = NSLocalizedString("Check the Keychain lock and access permissions, then restart the history service in Settings → General.", comment: "")
             alert.runModal()
         case AgentIssueCode.collectionUnavailable:
-            alert.addButton(withTitle: NSLocalizedString("Restart History Service", comment: ""))
-            alert.addButton(withTitle: NSLocalizedString("Later", comment: ""))
-            if alert.runModal() == .alertFirstButtonReturn { restartAgent() }
+            presentSettings(tab: "General")
+            return
         default:
-            alert.informativeText = NSLocalizedString("Check the connection settings using Set Up Extensions & Login… in the menu.", comment: "")
+            alert.informativeText = NSLocalizedString("Check the extension setup in Settings → General.", comment: "")
             alert.runModal()
         }
     }
@@ -449,7 +442,7 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case AgentIssueCode.safariAccessUnavailable: NSLocalizedString("Safari History Access Required", comment: "")
         case AgentIssueCode.keychainUnavailable: NSLocalizedString("Sync Stopped: Keychain Unavailable", comment: "")
         case AgentIssueCode.stateUnreadable: NSLocalizedString("Sync Stopped: Saved State Unreadable", comment: "")
-        case AgentIssueCode.collectionUnavailable: NSLocalizedString("History Collection · Unavailable", comment: "")
+        case AgentIssueCode.collectionUnavailable: NSLocalizedString("Collection: Unavailable", comment: "")
         case "agentVersionMismatch": NSLocalizedString("Restart the Updated Sync Service", comment: "")
         case "legacyWriterDetected": NSLocalizedString("Sync Stopped: Legacy Writer Detected", comment: "")
         case "extensionNotConnected": NSLocalizedString("Waiting for the Extension", comment: "")
@@ -507,7 +500,11 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func connectPair() {
+        guard !connectBusy else { return }
+        connectBusy = true
+        updateSyncSettings()
         Task {
+            defer { connectBusy = false; updateSyncSettings() }
             do {
                 let configuration = try JSONDecoder().decode(CollectionReply.self, from: await requestAsync(MenuCommand(operation: "collectionStatus")))
                 let health = try await requestHealth()
@@ -543,6 +540,9 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var loadedRevision: String?
 
     private func loadCollectionForm() async {
+        guard !collectionFormLoading else { return }
+        collectionFormLoading = true
+        defer { collectionFormLoading = false }
         do {
             let reply = try JSONDecoder().decode(CollectionReply.self, from: await requestAsync(MenuCommand(operation: "collectionStatus")))
             let discovery = try JSONDecoder().decode(CollectionCandidates.self, from: await requestAsync(MenuCommand(operation: "collectionCandidates")))
@@ -581,7 +581,6 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 try await checkCommand(MenuCommand(operation: "savePair", profileID: id, result: collect ? "enable" : "disable", snapshotJSON: reply.pair?.revision ?? "", expectedRemoved: removed, expectedPending: reply.pendingCount))
                 try registerLoginItemIfNeeded()
                 await loadCollectionForm()
-                await refreshPairLabel()
                 await refreshStatusAsync()
                 feedback.stringValue = NSLocalizedString("Saved", comment: "")
             } catch { feedback.stringValue = error.localizedDescription }
@@ -594,7 +593,11 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func collectNow() {
+        guard collectButton.isEnabled, !collectBusy else { return }
+        collectBusy = true
+        renderStatus()
         Task {
+            defer { collectBusy = false; renderStatus() }
             do { try await checkCommand(MenuCommand(operation: "collectNow")) }
             catch { NSAlert(error: error).runModal() }
             await refreshStatusAsync()
@@ -602,9 +605,12 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func toggleSync() {
+        guard !syncBusy else { return }
+        syncBusy = true
         let requested = syncSwitch.state == .on
         syncSwitch.isEnabled = false
         Task {
+            defer { syncBusy = false; updateSyncSettings() }
             do {
                 try await checkCommand(MenuCommand(operation: "setSyncEnabled", result: requested ? "enable" : "disable"))
                 syncFeedback.stringValue = ""
@@ -630,118 +636,199 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return nil
     }
 
-    private func refreshPairLabel() async {
-        syncSwitch.isEnabled = false
-        assistControl.isEnabled = false
-        assistControl.state = .off
-        assistProfile = nil
-        do {
-            let reply = try JSONDecoder().decode(CollectionReply.self, from: await requestAsync(MenuCommand(operation: "collectionStatus")))
-            let health = try await requestHealth()
-            latestHealth = health
-            generalInfo.stringValue = compatibilityDescription()
-            recoveryButton.isHidden = health.issueCode == nil
-            let canEnable = reply.enabled && reply.pair?.extensionID != nil && health.runtimeState == "ready"
-            let notice = Self.displaySyncPreference(health, canEnable: canEnable, on: syncSwitch)
-            if let pair = reply.pair, let source = reply.sources.first(where: { $0.id == pair.source }) {
-                let state = NSLocalizedString(reply.extensionUpdateRequired == true ? "Reload the bundled extension in the selected profile." : (pair.extensionID == nil ? "Extension not connected" : "Extension connected"), comment: "")
-                pairLabel.stringValue = "Safari ↔ " + source.browserType + " · " + source.profileName + " (" + source.id + ")\n" + state
-            } else {
-                pairLabel.stringValue = NSLocalizedString("Select a profile in History Collection.", comment: "")
-            }
-            if health.enabled, health.runtimeState == "ready", let profile = health.activeProfileID,
-               let data = try? await requestAsync(MenuCommand(operation: "cloudStatus", profileID: profile)) {
-                if let diagnostics = try? JSONDecoder().decode(CloudDiagnostics.self, from: data), let assist = diagnostics.safariAssist {
-                    assistProfile = profile
-                    assistControl.state = assist.enabled ? .on : .off
-                    assistControl.isEnabled = true
-                }
-            }
-            if !reply.enabled { pairLabel.stringValue += "\n" + NSLocalizedString("Turn on history collection to enable sync.", comment: "") }
-            if let notice { pairLabel.stringValue += "\n" + notice }
-        } catch {
-            pairLabel.stringValue = Self.displaySyncPreference(nil, canEnable: false, on: syncSwitch) ?? ""
+    private func updateSyncSettings() {
+        let health = statusSnapshot?.sync
+        let collection = statusSnapshot?.collection
+        let canEnable = collection?.enabled == true && collection?.pair?.extensionID != nil && health?.runtimeState == "ready"
+        let notice = Self.displaySyncPreference(health, canEnable: canEnable, on: syncSwitch)
+        if syncBusy { syncSwitch.isEnabled = false }
+        if let pair = collection?.pair, let source = collection?.sources.first(where: { $0.id == pair.source }) {
+            let state = NSLocalizedString(statusSnapshot?.extensionUpdateRequired == true ? "Reload the bundled extension in the selected profile." : (pair.extensionID == nil ? "Extension not connected" : "Extension connected"), comment: "")
+            pairLabel.stringValue = "Safari ↔ " + source.browserType + " · " + source.profileName + "\n" + state
+        } else {
+            pairLabel.stringValue = NSLocalizedString("Select a profile in History Collection.", comment: "")
         }
+        if collection?.enabled == false { pairLabel.stringValue += "\n" + NSLocalizedString("Turn on history collection to enable sync.", comment: "") }
+        if let notice { pairLabel.stringValue += "\n" + notice }
+        connectButton.isEnabled = collection?.pair != nil && !connectBusy
+        compatibilityInfo.stringValue = compatibilityDescription()
+        let issue = health?.issueCode
+        let commonIssue = health == nil || [AgentIssueCode.safariAccessUnavailable, AgentIssueCode.keychainUnavailable,
+                                            AgentIssueCode.collectionUnavailable, "agentVersionMismatch", "legacyWriterDetected"].contains(issue ?? "")
+        syncIssueLabel.stringValue = issue.map { message(for: $0) } ?? ""
+        syncIssueLabel.isHidden = issue == nil
+        syncGeneralButton.isHidden = !commonIssue
+        recoveryButton.isHidden = issue == nil || commonIssue
+    }
+
+    private func refreshPairLabel() async {
+        updateSyncSettings()
+        guard !assistBusy else { return }
+        guard let health = statusSnapshot?.sync, health.enabled, health.runtimeState == "ready", let profile = health.activeProfileID else {
+            assistControl.isEnabled = false
+            assistControl.state = .off
+            assistProfile = nil
+            return
+        }
+        do {
+            let data = try await requestAsync(MenuCommand(operation: "cloudStatus", profileID: profile))
+            let diagnostics = try JSONDecoder().decode(CloudDiagnostics.self, from: data)
+            guard !assistBusy, statusSnapshot?.sync?.activeProfileID == profile,
+                  statusSnapshot?.sync?.enabled == true else { return }
+            assistProfile = profile
+            assistControl.state = diagnostics.safariAssist?.enabled == true ? .on : .off
+            assistControl.isEnabled = true
+        } catch { assistControl.isEnabled = false; assistProfile = nil }
     }
 
     @objc private func showSettings() { presentSettings(tab: nil) }
+    @objc private func openGeneralSettings() { presentSettings(tab: "General") }
     @objc private func openCollectionSettings() { presentSettings(tab: "History Collection") }
     @objc private func openSyncSettings() { presentSettings(tab: "Browser Sync") }
     @objc private func openViewerSettings() { presentSettings(tab: "Web Viewer") }
 
     private func presentSettings(tab: String?) {
         if settingsWindow == nil {
-            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 470),
-                                  styleMask: [.titled, .closable], backing: .buffered, defer: false)
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 580),
+                                  styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
             window.title = NSLocalizedString("Settings…", comment: "")
+            window.contentMinSize = NSSize(width: 560, height: 460)
             window.isReleasedWhenClosed = false
-            let tabs = NSTabView(frame: window.contentView!.bounds.insetBy(dx: 16, dy: 16))
-            window.contentView!.addSubview(tabs)
+            window.delegate = self
+            let tabs = NSTabView()
+            tabs.translatesAutoresizingMaskIntoConstraints = false
+            let content = window.contentView!
+            content.addSubview(tabs)
+            NSLayoutConstraint.activate([
+                tabs.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 16),
+                tabs.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16),
+                tabs.topAnchor.constraint(equalTo: content.topAnchor, constant: 12),
+                tabs.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -12)
+            ])
             settingsTabs = tabs
-            func pane(_ title: String, _ actions: [(String, Selector)]) -> NSStackView {
+            var panes: [NSStackView] = []
+            func pane(_ title: String) -> NSStackView {
                 let page = NSTabViewItem(identifier: title)
                 page.label = NSLocalizedString(title, comment: "")
-                let container = NSView()
+                let scroll = NSScrollView()
+                scroll.hasVerticalScroller = true
+                scroll.autohidesScrollers = true
+                scroll.drawsBackground = false
+                let document = SettingsDocumentView()
+                document.translatesAutoresizingMaskIntoConstraints = false
                 let stack = NSStackView()
                 stack.orientation = .vertical
                 stack.alignment = .leading
                 stack.spacing = 8
                 stack.translatesAutoresizingMaskIntoConstraints = false
-                container.addSubview(stack)
+                document.addSubview(stack)
+                scroll.documentView = document
                 NSLayoutConstraint.activate([
-                    stack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
-                    stack.topAnchor.constraint(equalTo: container.topAnchor, constant: 14),
-                    stack.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor, constant: -16)
+                    document.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
+                    stack.leadingAnchor.constraint(equalTo: document.leadingAnchor, constant: 16),
+                    stack.topAnchor.constraint(equalTo: document.topAnchor, constant: 14),
+                    stack.trailingAnchor.constraint(equalTo: document.trailingAnchor, constant: -16),
+                    stack.bottomAnchor.constraint(equalTo: document.bottomAnchor, constant: -14)
                 ])
-                for (name, action) in actions {
-                    stack.addArrangedSubview(NSButton(title: NSLocalizedString(name, comment: ""), target: self, action: action))
-                }
-                page.view = container
+                page.view = scroll
                 tabs.addTabViewItem(page)
+                panes.append(stack)
                 return stack
             }
-            populateGeneral(pane("General", []))
-            let collection = pane("History Collection", [])
-            collection.addArrangedSubview(NSTextField(labelWithString: NSLocalizedString("Select the profile to collect and sync with Safari.", comment: "")))
+            func button(_ control: NSButton, title: String, action: Selector, in stack: NSStackView) {
+                control.title = NSLocalizedString(title, comment: "")
+                control.bezelStyle = .rounded
+                control.target = self
+                control.action = action
+                stack.addArrangedSubview(control)
+            }
+            func heading(_ title: String, in stack: NSStackView) {
+                let label = NSTextField(labelWithString: NSLocalizedString(title, comment: ""))
+                label.font = .boldSystemFont(ofSize: NSFont.systemFontSize)
+                stack.addArrangedSubview(label)
+            }
+            populateGeneral(pane("General"))
+            let collection = pane("History Collection")
+            collection.addArrangedSubview(collectionStatusLabel)
+            button(collectionGeneralButton, title: "Open General Settings…", action: #selector(openGeneralSettings), in: collection)
+            button(collectButton, title: "Collect History Now", action: #selector(collectNow), in: collection)
+            heading("Collection Settings", in: collection)
+            collection.addArrangedSubview(NSTextField(wrappingLabelWithString: NSLocalizedString("Select the profile to collect and sync with Safari.", comment: "")))
+            popup.identifier = NSUserInterfaceItemIdentifier("collectionProfile")
+            enabled.identifier = NSUserInterfaceItemIdentifier("collectionEnabled")
             collection.addArrangedSubview(popup)
             collection.addArrangedSubview(enabled)
             collection.addArrangedSubview(NSButton(title: NSLocalizedString("Save", comment: ""), target: self, action: #selector(configureCollection(_:))))
             collection.addArrangedSubview(feedback)
-            let web = pane("Web Viewer", [])
+
+            let sync = pane("Browser Sync")
+            sync.addArrangedSubview(syncStatusLabel)
+            sync.addArrangedSubview(pairLabel)
+            let title = NSLocalizedString("Browser Sync", comment: "")
+            syncSwitch.target = self
+            syncSwitch.action = #selector(toggleSync)
+            syncSwitch.setAccessibilityLabel(title)
+            sync.addArrangedSubview(NSStackView(views: [NSTextField(labelWithString: title), syncSwitch]))
+            button(connectButton, title: "Connect Selected Profile", action: #selector(connectPair), in: sync)
+            sync.addArrangedSubview(syncIssueLabel)
+            button(syncGeneralButton, title: "Open General Settings…", action: #selector(openGeneralSettings), in: sync)
+            button(recoveryButton, title: "Resolve Sync Issue…", action: #selector(resolveBlockedIssue), in: sync)
+            sync.addArrangedSubview(syncFeedback)
+            heading("Compatibility on This Mac", in: sync)
+            sync.addArrangedSubview(compatibilityInfo)
+            assistControl.target = self
+            assistControl.action = #selector(configureSafariAssist)
+            sync.addArrangedSubview(assistControl)
+            sync.addArrangedSubview(NSTextField(wrappingLabelWithString: NSLocalizedString("Sync assist opens example.com in Safari and adds a visit that can sync to other devices.", comment: "")))
+            sync.addArrangedSubview(NSButton(title: NSLocalizedString("Open Detailed Diagnostics…", comment: ""), target: self, action: #selector(showCloudDiagnostics)))
+
+            let web = pane("Web Viewer")
+            web.addArrangedSubview(viewerStatusLabel)
+            button(viewerRetryButton, title: "Retry Web Viewer", action: #selector(retryViewer), in: web)
+            heading("Viewer Settings", in: web)
             let defaults = UserDefaults.standard
             viewerEnabled.state = defaults.bool(forKey: "viewerEnabled") ? .on : .off
             web.addArrangedSubview(viewerEnabled)
             for (label, field, key) in [("Tailscale login", viewerOwner, "viewerOwner"), ("Viewer URL", viewerOrigin, "viewerOrigin")] {
                 web.addArrangedSubview(NSTextField(labelWithString: NSLocalizedString(label, comment: "")))
                 field.setAccessibilityLabel(NSLocalizedString(label, comment: ""))
+                field.identifier = NSUserInterfaceItemIdentifier(key)
                 field.stringValue = defaults.string(forKey: key) ?? ""
-                field.widthAnchor.constraint(equalToConstant: 410).isActive = true
                 web.addArrangedSubview(field)
             }
             web.addArrangedSubview(NSButton(title: NSLocalizedString("Save", comment: ""), target: self, action: #selector(saveViewer(_:))))
             web.addArrangedSubview(viewerFeedback)
-            let sync = pane("Browser Sync", [("Connect Selected Profile", #selector(connectPair))])
-            sync.insertArrangedSubview(pairLabel, at: 0)
-            let title = NSLocalizedString("Browser Sync", comment: "")
-            syncSwitch.target = self
-            syncSwitch.action = #selector(toggleSync)
-            syncSwitch.setAccessibilityLabel(title)
-            syncSwitch.isEnabled = false
-            syncSwitch.isHidden = true
-            sync.insertArrangedSubview(NSStackView(views: [NSTextField(labelWithString: title), syncSwitch]), at: 1)
-            assistControl.target = self
-            assistControl.action = #selector(configureSafariAssist)
-            sync.addArrangedSubview(assistControl)
-            sync.addArrangedSubview(NSTextField(wrappingLabelWithString: NSLocalizedString("Sync assist opens example.com in Safari and adds a visit that can sync to other devices.", comment: "")))
-            sync.addArrangedSubview(syncFeedback)
-            sync.addArrangedSubview(NSButton(title: NSLocalizedString("Open Detailed Diagnostics…", comment: ""), target: self, action: #selector(showCloudDiagnostics)))
+            for stack in panes {
+                for view in stack.arrangedSubviews where view is NSTextField || view is NSPopUpButton {
+                    view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+                }
+            }
             window.center()
             settingsWindow = window
         }
         if let tab { settingsTabs?.selectTabViewItem(withIdentifier: tab) }
-        Task { feedback.stringValue = ""; await loadCollectionForm(); await refreshPairLabel() }
+        renderStatus()
         settingsWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        if settingsStatusTask == nil {
+            settingsStatusTask = Task { [weak self] in
+                while !Task.isCancelled {
+                    guard let self, self.settingsWindow?.isVisible == true else { return }
+                    self.requestViewerReadiness()
+                    await self.refreshStatusAsync()
+                    do { try await Task.sleep(for: .seconds(10)) } catch { return }
+                }
+            }
+        }
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        settingsStatusTask?.cancel()
+        settingsStatusTask = nil
+    }
+
+    private final class SettingsDocumentView: NSView {
+        override var isFlipped: Bool { true }
     }
 
     @objc private func saveViewer(_ sender: NSButton) {
@@ -761,7 +848,7 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         sender.isEnabled = false
         viewerChanging = true
         Task {
-            defer { sender.isEnabled = true; viewerChanging = false }
+            defer { sender.isEnabled = true; viewerChanging = false; renderStatus() }
             do {
                 if shouldEnable {
                     try await checkCommand(MenuCommand(operation: "setViewerOrigin", snapshotJSON: address))
@@ -788,8 +875,9 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func retryViewer() {
         guard !viewerChanging else { return }
         viewerChanging = true
+        renderStatus()
         Task {
-            defer { viewerChanging = false }
+            defer { viewerChanging = false; renderStatus() }
             await restartConfiguredViewer()
         }
     }

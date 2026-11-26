@@ -13,7 +13,7 @@ Where did setup stop?
 - Selecting Chrome, Edge, or both:
 - Loading the revealed unpacked extension folder:
 - Approving Open at Login:
-- Granting Full Disk Access (the development build uses `Safari Chromium History Sync.app`):
+- Granting Full Disk Access to the parent `Safari Chromium History Sync.app`:
 - Detecting or selecting a connected profile:
 
 ## Environment

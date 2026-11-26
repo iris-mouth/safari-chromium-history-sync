@@ -4,7 +4,21 @@ import ServiceManagement
 
 @main @MainActor struct PresentationCheck {
     static func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
-    static func main() async throws {
+    static func main() {
+        let app = NSApplication.shared
+        app.setActivationPolicy(.prohibited)
+        Task {
+            do { try await runChecks(); exit(0) }
+            catch {
+                FileHandle.standardError.write(Data("AppKit tests failed: \(error)\n".utf8))
+                exit(1)
+            }
+        }
+        app.run()
+        preconditionFailure("AppKit stopped before the tests completed")
+    }
+
+    static func runChecks() async throws {
         var loginStatus = SMAppService.Status.notFound
         var registrations = 0
         let registered = try LoginItemRegistration.ensure(status: { loginStatus }, register: {
@@ -36,13 +50,28 @@ import ServiceManagement
             pendingSafariToBrowser: 2, recoveryCount: 1, unrecoverableCount: 0)
         let snapshot = MenuStatusSnapshot(collection: collection, sync: off, extensionUpdateRequired: false)
         var statusRequests: [String] = []
+        var statusUnavailable = false
+        let formData = Data(#"{"enabled":true,"pair":{"source":"edge:preview","revision":"revision","extensionID":"edge:preview"},"sources":[{"id":"edge:preview","browser":"chromium","browserType":"Edge","profileName":"Work","path":"/synthetic/History"}],"statuses":[]}"#.utf8)
+        let candidatesData = Data(#"{"candidates":[{"id":"edge:preview","browser":"chromium","browserType":"Edge","profileName":"Work","path":"/synthetic/History"}],"unavailableBrowsers":[]}"#.utf8)
         let delegate = MenuDelegate { command in
             statusRequests.append(command.operation)
-            return try JSONEncoder().encode(snapshot)
+            switch command.operation {
+            case "menuStatus":
+                if statusUnavailable { throw SyntheticLoginError.failed }
+                return try JSONEncoder().encode(snapshot)
+            case "collectionStatus": return formData
+            case "collectionCandidates": return candidatesData
+            case "collectNow":
+                try await Task.sleep(for: .milliseconds(50))
+                return Data(#"{"accepted":true}"#.utf8)
+            default: preconditionFailure("Viewing settings must not perform a write: \(command.operation)")
+            }
         }
         let menu = delegate.makeMenu()
         let topActions = menu.items.filter { !$0.isHidden }.compactMap { $0.action.map(NSStringFromSelector) }
-        precondition(topActions == ["openViewerSettings", "showSettings", "terminate:"])
+        precondition(topActions == ["openWeb", "openCollectionSettings", "openSyncSettings", "openViewerSettings", "showSettings", "terminate:"])
+        precondition(menu.items.filter { !$0.isSeparatorItem }.count == 6)
+        precondition(menu.items.first?.isEnabled == false, "Open History stays visible while Viewer is off")
         precondition(menu.items.first { $0.keyEquivalent == "," }?.action == NSSelectorFromString("showSettings"))
         precondition(MenuDelegate.statusImage(attention: false, description: "History Sync")?.isTemplate == true)
         precondition(MenuDelegate.statusImage(attention: true, description: "History Sync")?.isTemplate == true)
@@ -50,27 +79,27 @@ import ServiceManagement
         for _ in 0..<20 { try await Task.sleep(for: .milliseconds(10)) }
         precondition(statusRequests == ["menuStatus"], "menu loads one read-only overview")
         let visible = menu.items.filter { !$0.isHidden }.map { $0.title }
-        precondition(visible.contains("Browser Sync · Off"))
-        precondition(visible.contains("Pending browser deliveries 2 · Automatic retries 1"))
-        precondition(visible.contains("History Collection · Waiting for Database"))
-        precondition(visible.contains { $0.contains("Edge · Work") })
-        precondition(visible.contains { $0.hasPrefix("Last visit received from extension") && !$0.contains("Unverified") })
-        precondition(visible.contains("Collect History Now"))
+        precondition(visible.contains("Sync: Off"))
+        precondition(!visible.contains("Pending browser deliveries 2 · Automatic retries 1"))
+        precondition(visible.contains("Collection: Waiting for Database"))
+        precondition(!visible.contains { $0.contains("Edge · Work") })
+        precondition(!visible.contains { $0.hasPrefix("Last visit received from extension") })
+        precondition(!visible.contains("Collect History Now"))
         precondition(!visible.contains("Resolve Sync Issue…"), "an intentional OFF preference suppresses sync recovery")
         let now = Date()
         let localReady = MenuStatusPresentation(snapshot: snapshot, viewer: .ready(now), loading: false)
         precondition(!localReady.collection.attention && !localReady.sync.attention && !localReady.viewer.attention)
-        precondition(localReady.viewer.actions == [.openHistory])
+        precondition(localReady.canOpenHistory)
         precondition(localReady.viewer.details.contains("Access from other devices is unverified"))
         let unavailable = MenuStatusPresentation(snapshot: nil, viewer: .unavailable(lastReady: now), loading: false)
-        precondition(unavailable.viewer.actions == [.retryViewer, .viewerSettings] && unavailable.viewer.attention)
+        precondition(!unavailable.canOpenHistory && unavailable.viewer.attention && unavailable.collection.attention)
         precondition(!unavailable.sync.attention)
         let blocked = HealthSnapshot(enabled: false, syncRequested: true, activeProfileID: "edge:preview", runtimeState: "blocked",
             issueCode: AgentIssueCode.historyIdentityChanged, pendingBrowserToSafari: 0,
             pendingSafariToBrowser: 2, recoveryCount: 1, unrecoverableCount: 0)
         let needsRecovery = MenuStatusPresentation(snapshot: .init(collection: collection, sync: blocked,
             extensionUpdateRequired: false), viewer: .off, loading: false)
-        precondition(needsRecovery.sync.actions == [.resolveSync] && needsRecovery.sync.attention)
+        precondition(needsRecovery.sync.attention)
         let syncSwitch = NSSwitch()
         precondition(MenuDelegate.displaySyncPreference(blocked, canEnable: false, on: syncSwitch)
             == "Browser sync is on. Delivery is paused.")
@@ -83,6 +112,70 @@ import ServiceManagement
         precondition(MenuDelegate.displaySyncPreference(nil, canEnable: true, on: syncSwitch)
             == "Saved browser sync setting is unavailable.")
         precondition(!syncSwitch.isEnabled && syncSwitch.isHidden, "an unknown saved setting cannot be presented as off")
+        for state in [ViewerReadiness.off, .starting, .unavailable(lastReady: nil)] {
+            precondition(!MenuStatusPresentation(snapshot: snapshot, viewer: state, loading: false).canOpenHistory)
+        }
+        statusUnavailable = true
+        delegate.menuWillOpen(menu)
+        try await Task.sleep(for: .milliseconds(100))
+        precondition(menu.items.filter { !$0.isSeparatorItem && !$0.isHidden }.count == 6)
+        precondition(menu.items.contains { $0.title == "Collection: Unavailable" })
+        statusUnavailable = false
+        let routes = [("openCollectionSettings", "History Collection"), ("openSyncSettings", "Browser Sync"), ("openViewerSettings", "Web Viewer")]
+        for (action, tab) in routes {
+            precondition(NSApp.sendAction(NSSelectorFromString(action), to: delegate, from: nil))
+            try await Task.sleep(for: .milliseconds(100))
+            let window = app.windows.first { $0.title == "Settings…" }!
+            let tabs = descendants(window.contentView!).compactMap { $0 as? NSTabView }.first!
+            precondition(tabs.selectedTabViewItem?.identifier as? String == tab)
+        }
+        let settings = app.windows.first { $0.title == "Settings…" }!
+        defer { settings.close() }
+        let tabs = descendants(settings.contentView!).compactMap { $0 as? NSTabView }.first!
+        precondition(tabs.tabViewItems.map { $0.identifier as! String } == ["General", "History Collection", "Browser Sync", "Web Viewer"])
+        func pane(_ name: String) -> [NSView] {
+            descendants(tabs.tabViewItems.first { $0.identifier as? String == name }!.view!)
+        }
+        let collectionViews = pane("History Collection")
+        let profile = collectionViews.compactMap { $0 as? NSPopUpButton }.first!
+        precondition(profile.selectedItem?.representedObject as? String == "edge:preview")
+        profile.selectItem(at: 0)
+        let collectEnabled = collectionViews.compactMap { $0 as? NSButton }.first { $0.identifier?.rawValue == "collectionEnabled" }!
+        collectEnabled.state = .off
+        let viewerFields = pane("Web Viewer").compactMap { $0 as? NSTextField }
+        let origin = viewerFields.first { $0.identifier?.rawValue == "viewerOrigin" }!
+        origin.stringValue = "https://draft.example.test/"
+        delegate.applicationDidBecomeActive(Notification(name: NSApplication.didBecomeActiveNotification))
+        try await Task.sleep(for: .seconds(10.2))
+        precondition(statusRequests.filter { $0 == "menuStatus" }.count >= 4, "visible settings refresh without a manual action")
+        precondition(statusRequests.filter { $0 == "collectionStatus" }.count == 1, "polling does not reload the editable form")
+        precondition(profile.indexOfSelectedItem == 0 && collectEnabled.state == .off)
+        precondition(origin.stringValue == "https://draft.example.test/")
+        precondition(collectionViews.compactMap { $0 as? NSTextField }.contains { $0.stringValue.contains("Last visit received from extension") })
+        precondition(pane("Browser Sync").compactMap { $0 as? NSTextField }.contains { $0.stringValue.contains("Pending browser deliveries 2") })
+        for (action, owner) in [("collectNow", "History Collection"), ("restartAgent", "General"), ("openAccessSettings", "General"), ("resolveBlockedIssue", "Browser Sync"), ("retryViewer", "Web Viewer")] {
+            let owners = tabs.tabViewItems.filter { item in
+                descendants(item.view!).compactMap { $0 as? NSButton }.contains { $0.action == NSSelectorFromString(action) }
+            }.map { $0.identifier as! String }
+            precondition(owners == [owner], "operation must have a single settings owner: \(action)")
+        }
+        precondition(statusRequests.allSatisfy { ["menuStatus", "collectionStatus", "collectionCandidates"].contains($0) })
+        tabs.selectTabViewItem(withIdentifier: "History Collection")
+        let collect = collectionViews.compactMap { $0 as? NSButton }.first { $0.action == NSSelectorFromString("collectNow") }!
+        precondition(collect.isEnabled)
+        collect.performClick(nil)
+        collect.performClick(nil)
+        try await Task.sleep(for: .milliseconds(150))
+        precondition(statusRequests.filter { $0 == "collectNow" }.count == 1, "only the explicit action collects, with no concurrent duplicate")
+        precondition(profile.indexOfSelectedItem == 0 && origin.stringValue == "https://draft.example.test/")
+        settings.setContentSize(NSSize(width: 560, height: 460))
+        for item in tabs.tabViewItems {
+            tabs.selectTabViewItem(item)
+            settings.contentView!.layoutSubtreeIfNeeded()
+            let scroll = item.view as! NSScrollView
+            precondition(scroll.documentView!.frame.height > 0)
+            precondition(abs(scroll.documentView!.frame.width - scroll.contentView.bounds.width) < 1)
+        }
         let fakeHome = FileManager.default.temporaryDirectory.appendingPathComponent("profile-test-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: fakeHome) }
         let chrome = fakeHome.appendingPathComponent("Library/Application Support/Google/Chrome")
@@ -128,6 +221,6 @@ import ServiceManagement
         precondition(testButtons.allSatisfy { !$0.isHiddenOrHasHiddenAncestor })
         precondition(diagnosticRequests == ["cloudStatus"], "expansion must not perform a test or repair")
         detailed.close()
-        print("PASS: three menu domains, independent statuses and direct actions; menu and diagnostics use read-only commands")
+        print("PASS: compact menu, settings navigation and ownership, read-only refresh, drafts and isolated actions")
     }
 }
