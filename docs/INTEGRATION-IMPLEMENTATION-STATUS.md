@@ -50,8 +50,75 @@ native cursor diagnostic also reported that date, but its maximum is limited to
 IDs after the saved sync cursor and does not prove the whole native DB maximum.
 After opening Safari, 2,105 additional visits were collected, advancing the
 Viewer through November 25 at 16:58:35 JST. Both devices had iCloud Safari on.
-The new iPhone test visit was still absent from Mac Safari search and the Viewer
-at the last check; immediate iPhone-to-Mac arrival remains unverified.
+The new iPhone test visit was absent at the initial check. The owner subsequently
+confirmed new visits arriving through iCloud in the Viewer; arrival latency was
+not measured.
 
 Additional iCloud prompting was deferred because its benefit has not been
 established; existing delivery-triggered Sync Assist is unchanged.
+
+## Candidate 634
+
+Candidate 634 offered a single date, an optional end date, and all history.
+Clearing keywords preserves applied dates. Dates use ISO calendar-date notation
+with a localized weekday. The final assets passed all 51 Playwright cases,
+including WebKit, mobile/desktop Chromium, 320 px layouts, and enlarged text.
+The package passed deep signature verification. Installation and restart succeeded;
+the normal HTTPS URL then served the final assets. The owner confirmed the iPhone
+controls work, but rejected the layout for inconsistent alignment and spacing;
+candidate 635 replaces that layout. Parent-app Full
+Disk Access initially appeared enabled, but TCC rejected its stale code
+requirement. Removing and re-adding the installed parent app, followed by the
+system restart action, restored complete Safari and Edge scans. After Keychain
+approval, the Agent reported ready without an issue; saved and effective browser
+sync remained off. The normal HTTPS status endpoint responded successfully.
+
+## Candidate 635
+
+The search form has three fixed regions: two independently editable dates,
+optional keywords, and Search with application state. Empty dates leave the
+corresponding bounds open. Clearing any field submits all current inputs.
+Requests preserve the previous results and later edits; only a successful
+response changes the applied conditions and browser history. Back, Forward,
+and browser Reload discard unsubmitted edits.
+
+The extension, Go gateway, Swift integration and AppKit checks passed, as did
+all 60 browser cases across WebKit and mobile/desktop Chromium. Coverage includes
+open date bounds, IME confirmation, delayed and failed requests, empty results,
+history restoration, Japanese/English, 320–1000 px widths and 200% text sizing.
+The candidate package passed deep signature verification.
+
+The November 26 comparison used release binaries, the same synthetic SQLite
+fixtures, warmed filesystem cache, and medians of four localhost API requests
+in milliseconds. Keywords were `abc がっこう 1 kg`; the date was 2026-11-10 JST.
+These values exclude browser rendering and the Tailscale network.
+
+| Visits | 634 date / search | 635 date / search |
+| ---: | ---: | ---: |
+| 100,000 | 105 / 52 | 104 / 53 |
+| 1,000,000 | 106 / 110 | 106 / 110 |
+
+The owner measured the initial 635 preview on iPhone Safari over Wi-Fi:
+100,000 visits took 350 ms for date and 217 ms for search; 1,000,000 took
+1,151 ms and 1,034 ms. These are single reports, with cache state unspecified.
+The preview helper measures submission through rendered results and two frames.
+The owner requested a denser layout and removal of weekdays. The current
+revision uses ISO dates throughout, one-line date fields, 40 px control frames,
+and at least 44 px touch targets. Spacing keeps adjacent hit areas separate.
+At 390 px, the first row begins at 413 CSS px, compared with 475 in the
+previous compact preview and 590 in the initial preview.
+The controls, collection summary, and result tools remain aligned in Japanese
+and English. The preview used a temporary user service with Interactive
+scheduling; Background scheduling had throttled the large synthetic fixture.
+
+The owner approved the final compact preview, including the revised reload icon.
+Build 635 was installed and passed deep signature verification. The normal HTTPS
+URL serves assets identical to the installed package. WebKit checks passed for
+date and keyword searches, each field's clear action, reload, the fixed URL, and
+the 390 px layout. The temporary preview service and ports 8443/8444 were removed;
+the normal port 443 mapping is unchanged. After installation, both collection
+sources reported access unavailable. TCC still held an older parent-app code
+requirement after the first re-registration. Stopping the app and renewing that
+registration restored complete Safari and Edge scans. Agent initialization also
+completed after its Keychain wait: runtime ready, no issue, and saved/effective
+browser sync off. The normal HTTPS status endpoint returned 200.

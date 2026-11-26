@@ -1,0 +1,166 @@
+.search-form {
+  display: grid;
+  gap: 0.5rem;
+}
+.search-form label {
+  display: block;
+  color: var(--muted);
+  font-size: 0.875rem;
+  line-height: 1.4;
+}
+.period-area {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-inline-size: 0;
+}
+.period-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr));
+  gap: 0.5rem;
+}
+.date-field,
+.keyword-area {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+}
+.date-steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.25rem;
+}
+.search-form button {
+  min-height: var(--control-height);
+  font-size: 1rem;
+}
+.date-steps button {
+  padding: 0.25rem;
+}
+.field-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--clear-width);
+  align-items: stretch;
+  min-height: var(--control-height);
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+}
+.field-shell:has(input:focus-visible) {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+.field-shell input {
+  margin: 0;
+  border: 0;
+  background: transparent;
+  min-width: 0;
+  width: 100%;
+  font: inherit;
+  font-size: 1rem;
+  color: var(--text);
+}
+.field-shell input:focus-visible {
+  outline: none;
+}
+.keyword-shell input {
+  min-height: calc(var(--control-height) + 2 * var(--touch-slop));
+  margin-block: calc(-1px - var(--touch-slop));
+  padding: 0.25rem 0.5rem;
+}
+.keyword-shell input::-webkit-search-cancel-button {
+  appearance: none;
+}
+.keyword-shell input::placeholder {
+  color: var(--muted);
+  opacity: 1;
+}
+.search-form .field-clear {
+  min-height: calc(var(--control-height) - 2px);
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  min-width: var(--clear-width);
+}
+.field-clear::after {
+  inset-block: calc(-1px - var(--touch-slop));
+}
+.clear-slot {
+  min-width: var(--clear-width);
+}
+.date-picker {
+  position: relative;
+  min-width: 0;
+}
+.date-shell {
+  margin-top: 0.25rem;
+}
+.date-value {
+  display: grid;
+  align-content: center;
+  padding: 0.25rem 0.5rem;
+  line-height: 1.2;
+  font-size: 1rem;
+  min-height: 100%;
+  font-variant-numeric: tabular-nums;
+}
+.date-value > span {
+  white-space: nowrap;
+}
+.date-picker input {
+  position: absolute;
+  inset-inline: 0;
+  inset-block: calc(-1px - var(--touch-slop));
+  height: calc(100% + 2px + 2 * var(--touch-slop));
+  padding: 0;
+  opacity: 0;
+}
+.search-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.search-submit {
+  flex-shrink: 0;
+  min-width: 6rem;
+  padding: 0.25rem 0.75rem;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+.search-submit:hover {
+  background: #1d4c89;
+}
+.search-state {
+  color: var(--muted);
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+}
+.search-state span {
+  display: block;
+  margin-top: 0.25rem;
+}
+.filter-error {
+  margin: 0;
+  font-size: 0.875rem;
+  color: #943d2d;
+}
+.field-invalid {
+  border-color: #943d2d;
+}
+@media (forced-colors: active) {
+  .field-shell,
+  .field-invalid {
+    border-color: ButtonText;
+  }
+  .search-submit {
+    color: ButtonText;
+    background: ButtonFace;
+    border-color: ButtonText;
+  }
+}

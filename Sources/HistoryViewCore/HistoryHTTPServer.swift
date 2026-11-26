@@ -142,8 +142,7 @@ public final class HistoryHTTPServer: @unchecked Sendable {
             case "all" where params["start"] == nil && params["end"] == nil:
                 scope = .all
             case "range":
-                guard let start = params["start"], let end = params["end"] else { throw HistoryReaderError.invalid("日付が必要です。") }
-                scope = .range(start: start, end: end)
+                scope = .range(start: params["start"], end: params["end"])
             default:
                 throw HistoryReaderError.invalid("入力条件を確認してください。")
             }

@@ -50,6 +50,21 @@ enum HistoryCollectionTests {
         try expect(try reader.page(scope: latestDay, query: " ").items.count, 2, "blank keyword browses the selected day")
         try expect(try reader.page(scope: latestDay, query: "abc がっこう 1 kg", ids: ids).valid.count, 1, "revalidation also applies the normalized keywords")
         try expect(try reader.page(scope: .range(start: "2029-07-09", end: "2029-07-10"), query: "REPEATED").items.count, 3, "both dates in a range are included")
+        let since = try reader.page(scope: .range(start: "2029-07-10", end: nil), query: "REPEATED", ids: ids)
+        try expect(since.items.map(\.id), first.items.map(\.id), "start-only scope includes the boundary day")
+        try expect(Set(since.valid.map(\.id)), Set(first.items.map(\.id)), "start-only scope revalidates loaded IDs")
+        let until = try reader.page(scope: .range(start: nil, end: "2029-07-09"), limit: 1, ids: ids)
+        try expect(until.items.count, 1, "end-only scope is paginated")
+        try expect(until.valid.count, 2, "end-only scope includes earlier days and excludes next midnight")
+        let untilNext = try reader.page(scope: .range(start: nil, end: "2029-07-09"), cursor: until.cursor, limit: 1)
+        try expect(untilNext.items.count, 1, "end-only next page")
+        try expect(untilNext.items[0].id != until.items[0].id, true, "end-only pages do not repeat visits")
+        let anchored = try reader.page(scope: .range(start: "2029-07-10", end: nil), anchor: first.items[0].id)
+        try expect(anchored.items.map(\.id), first.items.map(\.id), "start-only anchor respects range")
+        do {
+            _ = try reader.page(scope: .range(start: "2029-07-10", end: nil), anchor: until.items[0].id)
+            throw IntegrationFailure.assertion("anchor outside open range accepted")
+        } catch HistoryReaderError.notFound { }
         try expect(try reader.status().sources.count, 2, "reader status exposes both sources")
         do { _ = try reader.page(scope: .range(start: "not-a-day", end: "2000-01-01")); throw IntegrationFailure.assertion("invalid day accepted") }
         catch HistoryReaderError.invalid { }
@@ -283,7 +298,12 @@ enum HistoryCollectionTests {
         try expect((page.body["items"] as? [[String: Any]])?.count, 2, "HTTP page limit")
         let search = try request(server.port, path: "/api/records?scope=range&start=2029-07-10&end=2029-07-10&q=abc+%E3%81%8C%E3%81%A3%E3%81%93%E3%81%86+1+kg", owner: "owner@example.test")
         try expect((search.body["items"] as? [[String: Any]])?.count, 1, "HTTP form-encoded AND search")
-        for invalid in ["scope=range&start=bad&end=2099-12-31", "scope=range&start=2029-07-10&end=2029-07-09", "scope=range&start=2029-07-10", "scope=all&start=2029-07-10", "scope=unknown", "q=keyword"] {
+        for bounds in ["start=2029-07-10", "end=2029-07-09"] {
+            let result = try request(server.port, path: "/api/records?scope=range&\(bounds)", owner: "owner@example.test")
+            try expect(result.status, 200, "HTTP accepts a single date boundary")
+            try expect((result.body["items"] as? [[String: Any]])?.count, 2, "HTTP single boundary filters visits")
+        }
+        for invalid in ["scope=range&start=bad&end=2099-12-31", "scope=range&start=2029-07-10&end=2029-07-09", "scope=range", "scope=range&start=", "scope=range&end=2029-02-29", "scope=all&start=2029-07-10", "scope=unknown", "q=keyword"] {
             try expect(try request(server.port, path: "/api/records?\(invalid)", owner: "owner@example.test").status, 422, "invalid HTTP scope or date range")
         }
         try expect(try request(server.port, path: "/history.sqlite", owner: "owner@example.test").status, 404, "database is never served")

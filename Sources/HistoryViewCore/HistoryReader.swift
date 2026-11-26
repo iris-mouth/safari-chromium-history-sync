@@ -59,7 +59,7 @@ public struct HistoryReaderStatus: Codable, Sendable {
 public struct HistoryReader: Sendable {
     public enum Scope: Sendable {
         case all
-        case range(start: String, end: String)
+        case range(start: String?, end: String?)
     }
 
     public let databasePath: String
@@ -123,11 +123,21 @@ public struct HistoryReader: Sendable {
         let candidate = terms.filter { $0.unicodeScalars.count >= 3 && !$0.unicodeScalars.contains(where: { $0.value == 0 }) }
             .max { $0.unicodeScalars.count < $1.unicodeScalars.count }
         if case let .range(start, end) = scope {
-            let startDate = try Self.parseDay(start)
-            let endDate = try Self.parseDay(end)
-            guard endDate >= startDate, let upper = Self.calendar.date(byAdding: .day, value: 1, to: endDate) else { throw HistoryReaderError.invalid("終了日は開始日以降にしてください。") }
-            whereSQL += " AND v.visit_seconds>=? AND v.visit_seconds<?"
-            args += [.integer(Int64(startDate.timeIntervalSince1970)), .integer(Int64(upper.timeIntervalSince1970))]
+            guard start != nil || end != nil else { throw HistoryReaderError.invalid("日付が必要です。") }
+            let startDate = try start.map(Self.parseDay)
+            let endDate = try end.map(Self.parseDay)
+            if let startDate, let endDate, endDate < startDate {
+                throw HistoryReaderError.invalid("終了日は開始日以降にしてください。")
+            }
+            if let startDate {
+                whereSQL += " AND v.visit_seconds>=?"
+                args.append(.integer(Int64(startDate.timeIntervalSince1970)))
+            }
+            if let endDate {
+                guard let upper = Self.calendar.date(byAdding: .day, value: 1, to: endDate) else { throw HistoryReaderError.invalid("日付が不正です。") }
+                whereSQL += " AND v.visit_seconds<?"
+                args.append(.integer(Int64(upper.timeIntervalSince1970)))
+            }
         }
         for term in terms {
             whereSQL += " AND (instr(v.norm_title,?)>0 OR instr(v.norm_url,?)>0)"

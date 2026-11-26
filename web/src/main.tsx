@@ -2,25 +2,30 @@ import { english } from "./language";
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./style.css";
+import { SearchForm } from "./SearchForm";
+import {
+  Scope,
+  View,
+  dayView,
+  rangeScope,
+  sameView,
+  scopeLabel as formatScope,
+} from "./search";
 
-function DateField({ label, value, min, onChange }: {
-  label: string;
-  value: string;
-  min?: string;
-  onChange: (value: string) => void;
-}) {
-  return (
-    <label>
-      {label}
-      <span className="date-control">
-        <span className="compact-date" aria-hidden="true">{value.replaceAll("-", "/") || "—"}</span>
-        <input type="date" value={value} min={min} max="9999-12-30"
-          onChange={event => onChange(event.currentTarget.value)} required />
-      </span>
-    </label>
-  );
+function displayTimestamp(seconds: number) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Tokyo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date(seconds * 1000));
+  const part = (type: string) =>
+    parts.find((p) => p.type === type)?.value ?? "";
+  return `${part("year")}-${part("month")}-${part("day")} ${part("hour")}:${part("minute")}`;
 }
-
 type Row = {
   id: number;
   title: string;
@@ -32,8 +37,6 @@ type Row = {
   browser_type: string;
   profile_name: string;
 };
-type Scope = { kind: "all" } | { kind: "range"; start: string; end: string };
-type View = { scope: Scope; q: string };
 type Saved = {
   key: string;
   view: View;
@@ -79,14 +82,6 @@ async function api<T>(url: string, signal?: AbortSignal): Promise<T> {
     );
   return body;
 }
-function rangeScope(start: unknown, end: unknown): Scope | null {
-  return isDay(start) && isDay(end) && start <= end ? { kind: "range", start, end } : null;
-}
-function isDay(value: unknown): value is string {
-  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value) || value > "9999-12-30") return false;
-  const day = new Date(`${value}T00:00:00Z`);
-  return Number.isFinite(day.getTime()) && day.toISOString().slice(0, 10) === value;
-}
 function legacyView(): View | null {
   const p = new URLSearchParams(location.search);
   const q = p.get("q")?.trim() ?? "";
@@ -95,35 +90,70 @@ function legacyView(): View | null {
   return scope && { scope, q };
 }
 function readSaved(value: unknown): Saved | null {
-  if (typeof value !== "object" || value === null || !("view" in value) ||
-      !("key" in value) || typeof value.key !== "string" ||
-      !("ids" in value) || !Array.isArray(value.ids) ||
-      !("cursor" in value) || (value.cursor !== null && typeof value.cursor !== "string") ||
-      !("scroll" in value) || typeof value.scroll !== "number") return null;
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("view" in value) ||
+    !("key" in value) ||
+    typeof value.key !== "string" ||
+    !("ids" in value) ||
+    !Array.isArray(value.ids) ||
+    !("cursor" in value) ||
+    (value.cursor !== null && typeof value.cursor !== "string") ||
+    !("scroll" in value) ||
+    typeof value.scroll !== "number"
+  )
+    return null;
   const view = value.view;
-  if (typeof view !== "object" || view === null || !("scope" in view) ||
-      !("q" in view) || typeof view.q !== "string") return null;
+  if (
+    typeof view !== "object" ||
+    view === null ||
+    !("scope" in view) ||
+    !("q" in view) ||
+    typeof view.q !== "string"
+  )
+    return null;
   const scope = view.scope;
-  if (typeof scope !== "object" || scope === null || !("kind" in scope)) return null;
-  const parsedScope: Scope | null = scope.kind === "all" ? { kind: "all" } :
-    scope.kind === "range" && "start" in scope && "end" in scope ? rangeScope(scope.start, scope.end) : null;
+  if (typeof scope !== "object" || scope === null || !("kind" in scope))
+    return null;
+  const parsedScope: Scope | null =
+    scope.kind === "all"
+      ? { kind: "all" }
+      : scope.kind === "range" && "start" in scope && "end" in scope
+        ? rangeScope(scope.start, scope.end)
+        : null;
   if (!parsedScope) return null;
   return {
     key: value.key,
     view: { scope: parsedScope, q: view.q },
-    ids: value.ids.filter((id): id is number => typeof id === "number" && Number.isSafeInteger(id) && id > 0),
+    ids: value.ids.filter(
+      (id): id is number =>
+        typeof id === "number" && Number.isSafeInteger(id) && id > 0,
+    ),
     cursor: value.cursor,
     scroll: value.scroll,
-    focus: "focus" in value && typeof value.focus === "number" ? value.focus : undefined,
-    offset: "offset" in value && typeof value.offset === "number" ? value.offset : undefined,
+    focus:
+      "focus" in value && typeof value.focus === "number"
+        ? value.focus
+        : undefined,
+    offset:
+      "offset" in value && typeof value.offset === "number"
+        ? value.offset
+        : undefined,
   };
 }
 const reloadPositionKey = "viewerReloadPosition";
 function reloadPosition(saved: Saved | null): Saved | null {
   if (!saved) return null;
   try {
-    const position: unknown = JSON.parse(sessionStorage.getItem(reloadPositionKey) ?? "null");
-    if (Array.isArray(position) && position[0] === saved.key && typeof position[1] === "number") {
+    const position: unknown = JSON.parse(
+      sessionStorage.getItem(reloadPositionKey) ?? "null",
+    );
+    if (
+      Array.isArray(position) &&
+      position[0] === saved.key &&
+      typeof position[1] === "number"
+    ) {
       return {
         ...saved,
         scroll: position[1],
@@ -140,24 +170,11 @@ function blankEntry(key: string, view: View): Saved {
 function recordsParams({ scope, q }: View, limit: number) {
   const p = new URLSearchParams({ scope: scope.kind, limit: String(limit) });
   if (scope.kind === "range") {
-    p.set("start", scope.start);
-    p.set("end", scope.end);
+    if (scope.start) p.set("start", scope.start);
+    if (scope.end) p.set("end", scope.end);
   }
   if (q) p.set("q", q);
   return p;
-}
-function dayView(day: string, q = ""): View {
-  return { scope: { kind: "range", start: day, end: day }, q };
-}
-function sameView(a: View, b: View) {
-  return a.q === b.q && (a.scope.kind === "all"
-    ? b.scope.kind === "all"
-    : b.scope.kind === "range" && a.scope.start === b.scope.start && a.scope.end === b.scope.end);
-}
-function shift(day: string, delta: number) {
-  const d = new Date(day + "T12:00:00Z");
-  d.setUTCDate(d.getUTCDate() + delta);
-  return d.toISOString().slice(0, 10);
 }
 function firstVisibleRow(rows: Row[]) {
   for (const row of rows) {
@@ -185,63 +202,6 @@ function SiteIcon({ source }: { source?: string }) {
     </span>
   );
 }
-function SearchForm({ view, day, t, onSearch }: {
-  view: View;
-  day: string;
-  t: (value: string) => string;
-  onSearch: (view: View) => void;
-}) {
-  const [kind, setKind] = useState(view.scope.kind);
-  const [start, setStart] = useState(view.scope.kind === "range" ? view.scope.start : day);
-  const [end, setEnd] = useState(view.scope.kind === "range" ? view.scope.end : day);
-  const composing = useRef(false);
-  return (
-    <form role="search" onSubmit={(event) => {
-      event.preventDefault();
-      if (composing.current) return;
-      const keyword = new FormData(event.currentTarget).get("q");
-      if (typeof keyword !== "string") return;
-      const scope: Scope | null = kind === "range" ? rangeScope(start, end) : { kind: "all" };
-      if (scope) onSearch({ scope, q: keyword.trim() });
-    }}>
-      <fieldset className="search-scope">
-        <legend>{t("検索範囲")}</legend>
-        <label>
-          <input type="radio" name="scope" checked={kind === "all"} onChange={() => setKind("all")} />
-          {t("全期間")}
-        </label>
-        <label>
-          <input type="radio" name="scope" checked={kind === "range"} onChange={() => setKind("range")} />
-          {t("期間指定")}
-        </label>
-      </fieldset>
-      <label>
-        {t("キーワード（任意）")}
-        <input
-          type="search"
-          name="q"
-          enterKeyHint="search"
-          defaultValue={view.q}
-          placeholder={t("タイトルやURLから探す")}
-          onCompositionStart={() => { composing.current = true; }}
-          onCompositionEnd={() => { composing.current = false; }}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && (composing.current || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229)) {
-              event.preventDefault();
-            }
-          }}
-        />
-      </label>
-      <div className={`date-fields ${kind === "all" ? "all-time" : ""}`}>
-        {kind === "range" && <>
-          <DateField label={t("開始日")} value={start} onChange={setStart} />
-          <DateField label={t("終了日")} value={end} min={start} onChange={setEnd} />
-        </>}
-        <button type="submit">{t("検索")}</button>
-      </div>
-    </form>
-  );
-}
 function App() {
   const [preference, setPreference] = useState(() => {
     try {
@@ -266,19 +226,30 @@ function App() {
   const [initial] = useState(() => {
     const saved = reloadPosition(readSaved(history.state));
     const timing = performance.getEntriesByType("navigation")[0];
-    const fromHistory = timing && "type" in timing && timing.type === "back_forward";
+    const fromHistory =
+      timing && "type" in timing && timing.type === "back_forward";
     return {
       saved,
       key: saved?.key ?? crypto.randomUUID(),
       view: saved?.view ?? legacyView(),
-      restoration: saved && { kind: fromHistory ? "history" : "reload", entry: saved } satisfies Restoration,
+      restoration:
+        saved &&
+        ({
+          kind: fromHistory ? "history" : "reload",
+          entry: saved,
+        } satisfies Restoration),
     };
   });
-  const [view, setView] = useState(initial.view),
+  const [formView, setFormView] = useState(initial.view);
+  const [pending, setPending] = useState<View | null>(null);
+  const started = useRef(false);
+  const historyWritable = useRef(true);
+  const [view, setView] = useState<View | null>(null),
     [rows, setRows] = useState<Row[]>([]);
   const [cursor, setCursor] = useState<string | null>(null),
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
+  const [searchFailed, setSearchFailed] = useState(false);
   const [zone, setZone] = useState("Asia/Tokyo"),
     [empty, setEmpty] = useState(false),
     [detail, setDetail] = useState<Row | null>(null);
@@ -297,8 +268,7 @@ function App() {
   );
   const controller = useRef<AbortController | null>(null);
   const serial = useRef(0),
-    state = useRef({ view, rows, cursor }),
-    restore = useRef(initial.restoration);
+    state = useRef({ view, rows, cursor });
   const pendingPosition = useRef<{
     rows: Row[];
     complete: () => void;
@@ -309,7 +279,7 @@ function App() {
   function save(s = state.current, write = true) {
     clearTimeout(scrollTimer.current);
     scrollTimer.current = undefined;
-    if (!s.view || !s.rows.length) return;
+    if (!s.view || !historyWritable.current) return;
     const visible = firstVisibleRow(s.rows);
     const saved: Saved = {
       key: entryKey.current,
@@ -345,23 +315,14 @@ function App() {
     return request;
   }
   function navigate(next: View) {
-    const current = state.current.view;
-    if (current && sameView(current, next)) {
-      void load(false);
-      return;
-    }
     save();
-    invalidateRequests();
-    setError("");
-    setRows([]);
-    setCursor(null);
-    entryKey.current = crypto.randomUUID();
-    history.pushState(blankEntry(entryKey.current, next), "", "/");
-    setView(next);
-  }
-  function browseDay(day: string) {
-    setFormRevision((revision) => revision + 1);
-    navigate(dayView(day, state.current.view?.q));
+    const current = state.current.view;
+    void load(
+      false,
+      null,
+      next,
+      current && sameView(current, next) ? "stay" : "push",
+    );
   }
   function applyStatus(s: Status) {
     setSources(s.sources ?? null);
@@ -371,20 +332,28 @@ function App() {
     setToday(s.today);
     setDefaultDay(s.day);
     setLatest(s.latest_time ?? null);
-    if (!state.current.view) {
+    if (!started.current) {
+      started.current = true;
       const next = dayView(s.day);
-      history.replaceState(blankEntry(entryKey.current, next), "", "/");
-      setView(next);
+      setFormView(next);
+      void load(false, null, next, "replace");
     }
   }
   useLayoutEffect(() => {
     history.scrollRestoration = "manual";
-    const saved = initial.saved ?? (initial.view && blankEntry(initial.key, initial.view));
+    const saved =
+      initial.saved ?? (initial.view && blankEntry(initial.key, initial.view));
     history.replaceState(saved, "", "/");
-    try { sessionStorage.removeItem(reloadPositionKey); } catch {}
+    try {
+      sessionStorage.removeItem(reloadPositionKey);
+    } catch {}
   }, []);
   useEffect(() => {
     const abort = new AbortController();
+    if (initial.view) {
+      started.current = true;
+      void load(false, initial.restoration, initial.view, "replace");
+    }
     api<Status>("/api/status", abort.signal)
       .then(applyStatus)
       .catch((e) => {
@@ -400,24 +369,31 @@ function App() {
       invalidateRequests();
       const stored = readSaved(e.state);
       const saved = (stored?.key && entries.current.get(stored.key)) || stored;
+      historyWritable.current = false;
       entryKey.current = saved?.key || crypto.randomUUID();
-      restore.current = saved && { kind: "history", entry: saved };
-      const next = saved?.view ?? legacyView() ?? (defaultDay ? dayView(defaultDay) : null);
-      if (!stored) history.replaceState(next && blankEntry(entryKey.current, next), "", "/");
-      setRows([]);
-      setCursor(null);
-      setView(next);
+      const next =
+        saved?.view ??
+        legacyView() ??
+        (defaultDay ? dayView(defaultDay) : null);
+      if (!stored)
+        history.replaceState(
+          next && blankEntry(entryKey.current, next),
+          "",
+          "/",
+        );
+      setFormView(next);
       setFormRevision((revision) => revision + 1);
+      if (next)
+        void load(
+          false,
+          saved && { kind: "history", entry: saved },
+          next,
+          "replace",
+        );
     }
     addEventListener("popstate", pop);
     return () => removeEventListener("popstate", pop);
   }, [defaultDay]);
-  useEffect(() => {
-    if (!view) return;
-    const restoration = restore.current;
-    restore.current = null;
-    void load(false, restoration);
-  }, [view, pageSize]);
   useEffect(() => {
     const onScroll = () => {
       clearTimeout(scrollTimer.current);
@@ -428,7 +404,10 @@ function App() {
       if (!saved) return;
       // Chromium may already have captured history.state for the reload.
       try {
-        sessionStorage.setItem(reloadPositionKey, JSON.stringify([saved.key, saved.scroll, saved.focus, saved.offset]));
+        sessionStorage.setItem(
+          reloadPositionKey,
+          JSON.stringify([saved.key, saved.scroll, saved.focus, saved.offset]),
+        );
       } catch {}
     };
     addEventListener("scroll", onScroll, { passive: true });
@@ -445,15 +424,22 @@ function App() {
     pendingPosition.current = null;
     pending.complete();
   }, [rows]);
-  async function load(more: boolean, restoration: Restoration | null = null) {
+  async function load(
+    more: boolean,
+    restoration: Restoration | null = null,
+    v = state.current.view,
+    navigation: "push" | "replace" | "stay" = "stay",
+    limit = pageSize,
+  ) {
     const current = state.current;
-    const v = current.view;
     if (!v) return;
     const request = invalidateRequests();
     const ac = new AbortController();
     controller.current = ac;
     setBusy(true);
+    setPending(v);
     setError("");
+    setSearchFailed(false);
     const old = more ? current.rows : [];
     const saved = restoration?.entry;
     const savedIds = saved?.ids || [];
@@ -471,7 +457,7 @@ function App() {
         valid.push(...result.valid);
         Object.assign(pageIcons, result.icons);
       }
-      const p = recordsParams(v, pageSize);
+      const p = recordsParams(v, limit);
       if (ids.length) p.set("ids", ids.slice(offset).join(","));
       if (more && current.cursor) p.set("cursor", current.cursor);
       const result = await api<Page>("/api/records?" + p, ac.signal);
@@ -485,13 +471,20 @@ function App() {
         const seen = new Set(next.map((row) => row.id));
         const retained = new Map(valid.map((row) => [row.id, row]));
         const anchorIndex = Math.max(0, savedIds.indexOf(saved.focus ?? 0));
-        const anchorId = savedIds.slice(anchorIndex).find((id) => retained.has(id));
-        const anchor = anchorId === undefined ? undefined : retained.get(anchorId);
+        const anchorId = savedIds
+          .slice(anchorIndex)
+          .find((id) => retained.has(id));
+        const anchor =
+          anchorId === undefined ? undefined : retained.get(anchorId);
         // The anchor can disappear after revalidation. Stop after passing its time.
         let oldest = Date.parse(next.at(-1)?.time ?? "");
         const anchorTime = Date.parse(anchor?.time ?? "");
-        while (nextCursor && (next.length < retained.size || (anchor && !seen.has(anchor.id) && oldest >= anchorTime))) {
-          const p = recordsParams(v, pageSize);
+        while (
+          nextCursor &&
+          (next.length < retained.size ||
+            (anchor && !seen.has(anchor.id) && oldest >= anchorTime))
+        ) {
+          const p = recordsParams(v, limit);
           p.set("cursor", nextCursor);
           const page = await api<Page>("/api/records?" + p, ac.signal);
           if (request !== serial.current) return;
@@ -516,6 +509,13 @@ function App() {
       } else {
         next = result.items;
       }
+      if (navigation === "push") {
+        save();
+        entryKey.current = crypto.randomUUID();
+        history.pushState(blankEntry(entryKey.current, v), "", "/");
+      }
+      historyWritable.current = false;
+      setView(v);
       setCursor(nextCursor);
       setIcons((previous) =>
         Object.fromEntries(
@@ -563,6 +563,7 @@ function App() {
             if (el)
               scrollBy(0, el.getBoundingClientRect().top - firstVisible.top);
           } else scrollTo(0, 0);
+          historyWritable.current = true;
           save(snapshot);
         },
       };
@@ -570,12 +571,12 @@ function App() {
     } catch (e) {
       if ((e as Error).name !== "AbortError" && request === serial.current) {
         setError((e as Error).message);
-        setRows([]);
-        setCursor(null);
+        setSearchFailed(true);
       }
     } finally {
       if (request === serial.current) {
         setBusy(false);
+        setPending(null);
       }
     }
   }
@@ -614,9 +615,10 @@ function App() {
   const scope = view?.scope;
   const range = scope?.kind === "range" ? scope : null;
   const singleDay = range && range.start === range.end ? range.start : null;
-  const scopeLabel = range
-    ? range.start === range.end ? range.start : `${range.start} – ${range.end}`
-    : scope ? t("全期間") : "";
+  const scopeLabel = scope ? formatScope(scope, lang) : "";
+  const latestLabel = latest
+    ? `${t("最新の履歴")}: ${latest.slice(0, 10)} ${latest.slice(11, 16)}`
+    : t("取り込み済みの履歴なし");
   return (
     <>
       <main>
@@ -643,16 +645,44 @@ function App() {
           </label>
         </header>
         <section className="controls" aria-label={t("履歴の条件")}>
-          {view && defaultDay && <SearchForm key={formRevision} view={view} day={defaultDay} t={t} onSearch={navigate} />}
-          <div className="data-status">
-            {latest
-              ? `${lang === "ja" ? "取り込み済みの最新" : "Latest visit"}: ${latest.slice(0, 10)} ${latest.slice(11, 16)}`
-              : t("取り込み済みの履歴なし")}
-          </div>
-          {sources && (
+          {formView && (
+            <SearchForm
+              key={formRevision}
+              initialView={formView}
+              displayed={view}
+              pending={pending}
+              busy={busy}
+              failed={searchFailed}
+              t={t}
+              onSearch={navigate}
+            />
+          )}
+          {sources ? (
             <details className="source-status">
               <summary>
-                {t("収集状態")} {collectionEnabled ? "" : t("（一時停止中）")}
+                <span className="data-status">{latestLabel}</span>
+                <span className="source-label">
+                  <span>
+                    {t("収集状態")}
+                    {!collectionEnabled && <small>{t("（一時停止中）")}</small>}
+                  </span>
+                  <svg
+                    className="disclosure-icon"
+                    viewBox="0 0 24 24"
+                    width="16"
+                    height="16"
+                    aria-hidden="true"
+                  >
+                    <path
+                      d="m6 9 6 6 6-6"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </span>
               </summary>
               {sources.length === 0 ? (
                 <p>{t("保存対象が未設定です。")}</p>
@@ -674,10 +704,7 @@ function App() {
                       {source.count},{" "}
                       {lang === "ja" ? "最終成功" : "Last collected"}{" "}
                       {source.last_success
-                        ? new Date(source.last_success * 1000).toLocaleString(
-                            lang,
-                            { timeZone: "Asia/Tokyo" },
-                          )
+                        ? displayTimestamp(source.last_success)
                         : t("なし")}
                       )
                     </li>
@@ -685,64 +712,75 @@ function App() {
                 </ul>
               )}
             </details>
+          ) : (
+            <div className="data-status">{latestLabel}</div>
           )}
-          <nav aria-label={t("日付移動")}>
-            <button
-              disabled={!singleDay}
-              onClick={() => singleDay && browseDay(shift(singleDay, -1))}
-            >
-              {t("← 前日")}
-            </button>
-            <button
-              disabled={!today}
-              onClick={() => browseDay(today)}
-            >
-              {t("今日")}
-            </button>
-            <span>{zone}</span>
-            <button
-              disabled={!singleDay}
-              onClick={() => singleDay && browseDay(shift(singleDay, 1))}
-            >
-              {t("翌日 →")}
-            </button>
-          </nav>
         </section>
         <section aria-label={t("履歴一覧")} aria-busy={busy}>
           <div className="list-heading">
-            <h2>
-              {view?.q
-                ? lang === "ja"
-                  ? `「${view.q}」の検索結果`
-                  : `Results for “${view.q}”`
-                : scopeLabel}
-              {view?.q && <small className="result-scope">{scopeLabel}</small>}
-            </h2>
-            <label className="page-size">
-              {t("件数")}
-              <select
-                aria-label={t("1回の表示件数")}
-                value={pageSize}
-                onChange={(e) => {
-                  save();
-                  setPageSize(Number(e.target.value));
+            <div className="result-title">
+              <p className="results-label">{t("表示中の条件")}</p>
+              <h2>
+                {view?.q
+                  ? lang === "ja"
+                    ? `「${view.q}」の検索結果`
+                    : `Results for “${view.q}”`
+                  : scopeLabel}
+                {view?.q && (
+                  <small className="result-scope">{scopeLabel}</small>
+                )}
+              </h2>
+            </div>
+            <div className="list-tools">
+              <label className="page-size">
+                {t("件数")}
+                <select
+                  aria-label={t("1回の表示件数")}
+                  value={pageSize}
+                  disabled={busy}
+                  onChange={(e) => {
+                    save();
+                    const limit = Number(e.target.value);
+                    setPageSize(limit);
+                    void load(false, null, state.current.view, "stay", limit);
+                  }}
+                >
+                  <option value="100">100</option>
+                  <option value="200">200</option>
+                  <option value="500">500</option>
+                </select>
+              </label>
+              <button
+                className="reload"
+                type="button"
+                aria-label={t("再読み込み")}
+                title={t("再読み込み")}
+                onClick={() => {
+                  api<Status>("/api/status")
+                    .then(applyStatus)
+                    .catch((e) => {
+                      if (!state.current.view) setError(e.message);
+                    });
+                  void load(false);
                 }}
               >
-                <option value="100">100</option>
-                <option value="200">200</option>
-                <option value="500">500</option>
-              </select>
-            </label>
-            <button
-              onClick={() => {
-                api<Status>("/api/status")
-                  .then(applyStatus)
-                  .catch((e) => { if (!state.current.view) setError(e.message); });
-                void load(false);
-              }}
-            >
-              {t("再読み込み")}
-            </button>
+                <svg
+                  viewBox="0 0 24 24"
+                  width="20"
+                  height="20"
+                  aria-hidden="true"
+                >
+                  <path
+                    d="M20 5v4h-4M19.05 14.57A7.5 7.5 0 1 1 17.3 6.7L20 9"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              </button>
+            </div>
           </div>
           {error && (
             <div role="alert" className="error">
@@ -769,9 +807,7 @@ function App() {
               <li id={"row-" + row.id} key={row.id}>
                 <button className="record" onClick={() => void open(row)}>
                   <time dateTime={row.time}>
-                    {view?.q || !singleDay ? (
-                      <small>{row.day}</small>
-                    ) : null}
+                    {view?.q || !singleDay ? <small>{row.day}</small> : null}
                     {row.time.slice(11, 19)}
                   </time>
                   <SiteIcon

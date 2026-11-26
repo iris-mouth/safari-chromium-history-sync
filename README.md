@@ -75,14 +75,18 @@ tailscale serve --bg --proxy-protocol=2 --tcp=443 tcp://127.0.0.1:8767
 
 Open the HTTPS root in a new tab on a device signed in as that Tailscale user.
 The Viewer starts on the most recent visit date in Tokyo time, or today if the
-history is empty. Choose all history or an inclusive date range, optionally
-enter words from the title or URL, and submit the search. The address stays at
-`/`. Back, Forward, and Reload restore the applied conditions in the same tab.
+history is empty. Edit the start date, end date, and optional keywords, then
+choose **Search**. An empty date leaves that boundary open; both empty dates
+search all history. Each date has its own Previous, Today, and Next controls.
+A field’s × clears that condition and searches with all the currently entered
+values. The address stays at `/`. Back, Forward, and Reload restore only the
+applied conditions in the same tab; unsubmitted edits are discarded.
 Set the language for each browser in the Viewer.
 
 **日本語**　メニューバーのアイコンから収集・同期・Viewer の状態を確認できます。
-閲覧だけならブラウザ間同期はオフのまま使えます。Viewer では全期間または
-日付範囲を選び、必要に応じてキーワードを入力して検索します。日付は東京時間です。
+閲覧だけならブラウザ間同期はオフのまま使えます。Viewer は開始日・終了日・
+キーワードを編集して「検索」で反映します。空の日付は制限なし、両方空なら全期間です。
+欄内の×はその条件を解除し、現在の入力条件すべてで検索します。日付は東京時間です。
 
 ## Limits
 

@@ -8,7 +8,12 @@ test.beforeEach(() => {
   execFileSync("python3", ["scripts/browser-fixture.py", fixturePath]);
 });
 function mutate(sql: string) {
-  execFileSync("python3", ["-c", "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.executescript(sys.argv[2]); c.commit(); c.close()", fixturePath, sql]);
+  execFileSync("python3", [
+    "-c",
+    "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.executescript(sys.argv[2]); c.commit(); c.close()",
+    fixturePath,
+    sql,
+  ]);
 }
 function deferred() {
   let resolve!: () => void;
@@ -18,9 +23,14 @@ function deferred() {
   return { promise, resolve };
 }
 async function showDay(page: Page, start: string, end = start) {
-  await page.getByRole("radio", { name: "期間指定" }).check();
-  await page.getByLabel("開始日").fill(start);
-  await page.getByLabel("終了日").fill(end);
+  await page
+    .getByLabel("開始日", { exact: true })
+    .and(page.locator("input"))
+    .fill(start);
+  await page
+    .getByLabel("終了日", { exact: true })
+    .and(page.locator("input"))
+    .fill(end);
   await page.getByRole("searchbox").fill("");
   await page.getByRole("button", { name: "検索", exact: true }).click();
 }
@@ -38,6 +48,13 @@ test("200件の密な一覧・ローカルアイコン・件数選択・日付�
   await expect(
     page.getByRole("heading", { name: "2026-11-10", exact: true }),
   ).toBeVisible();
+  await expect(page.locator(".date-value")).toHaveText([
+    "2026-11-10",
+    "2026-11-10",
+  ]);
+  await expect(page.locator(".data-status")).toHaveText(
+    "最新の履歴: 2026-11-10 09:00",
+  );
   expect(
     await page
       .locator(".record")
@@ -77,12 +94,23 @@ test("200件の密な一覧・ローカルアイコン・件数選択・日付�
   await expect(page.locator(".records li")).toHaveCount(100);
   await page.locator(".record").first().click();
   await expect(page.getByRole("dialog")).toContainText("端末情報なし");
+  await expect(page.getByRole("dialog").locator("dd").first()).toHaveText(
+    "2026-11-10 09:00:00 (Asia/Tokyo)",
+  );
   await expect(page.getByRole("dialog").getByRole("link")).toHaveAttribute(
     "target",
     "_blank",
   );
   await page.getByRole("button", { name: "閉じる" }).click();
-  await page.getByRole("button", { name: "翌日" }).click();
+  await page
+    .getByRole("group", { name: "開始日", exact: true })
+    .getByRole("button", { name: "翌日", exact: true })
+    .click();
+  await page
+    .getByRole("group", { name: "終了日", exact: true })
+    .getByRole("button", { name: "翌日", exact: true })
+    .click();
+  await page.getByRole("button", { name: "検索", exact: true }).click();
   await expect(page.locator(".records li")).toHaveCount(0);
   expect(
     await page.evaluate(
@@ -94,7 +122,14 @@ test("200件の密な一覧・ローカルアイコン・件数選択・日付�
 
 test("正規化検索・日付表示との往復・位置復元・再読み込み", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("radio", { name: "全期間" }).check();
+  await page
+    .getByLabel("開始日", { exact: true })
+    .and(page.locator("input"))
+    .fill("");
+  await page
+    .getByLabel("終了日", { exact: true })
+    .and(page.locator("input"))
+    .fill("");
   const search = page.getByRole("searchbox");
   await search.fill("abc がっこう 1 kg");
   await search.press("Enter");
@@ -108,7 +143,14 @@ test("正規化検索・日付表示との往復・位置復元・再読み込�
   ).toHaveCount(0);
   await page.getByRole("button", { name: "さらに読み込む" }).click();
   await expect(page.locator(".records li")).toHaveCount(400);
-  await page.getByRole("radio", { name: "期間指定" }).check();
+  await page
+    .getByLabel("開始日", { exact: true })
+    .and(page.locator("input"))
+    .fill("2026-11-10");
+  await page
+    .getByLabel("終了日", { exact: true })
+    .and(page.locator("input"))
+    .fill("2026-11-10");
   await search.fill("");
   await page.locator(".records li").nth(300).scrollIntoViewIfNeeded();
   const focus = await page
@@ -124,7 +166,12 @@ test("正規化検索・日付表示との往復・位置復元・再読み込�
   await expect(page.locator(".records li")).toHaveCount(200);
   await expect(page).toHaveURL("/");
   await page.goBack();
-  await expect(page.getByRole("radio", { name: "全期間" })).toBeChecked();
+  await expect(
+    page.getByLabel("開始日", { exact: true }).and(page.locator("input")),
+  ).toHaveValue("");
+  await expect(
+    page.getByLabel("終了日", { exact: true }).and(page.locator("input")),
+  ).toHaveValue("");
   await expect(search).toHaveValue("かたかな");
   await expect(page.locator(".records li")).toHaveCount(400);
   await expect
@@ -149,28 +196,50 @@ test("正規化検索・日付表示との往復・位置復元・再読み込�
     SELECT 1202,source_id,generation,1202,'https://example.test/late','カタカナ 遅着',visit_seconds,0.5,'かたかな 遅着','https://example.test/late'
     FROM visits WHERE id=250;
   `);
-  const reloadFocus = await page.locator(".records li").evaluateAll(es => {
+  const reloadFocus = await page.locator(".records li").evaluateAll((es) => {
     es[275].scrollIntoView();
-    return es.find(e => e.getBoundingClientRect().bottom > 0)?.id;
+    return es.find((e) => e.getBoundingClientRect().bottom > 0)?.id;
   });
   await page.reload();
   await expect(page).toHaveURL("/");
   await expect(search).toHaveValue("かたかな");
   await expect(page.locator(".records li")).toHaveCount(400);
-  await expect(page.locator(".records li").first()).toHaveAttribute("id", "row-1201");
+  await expect(page.locator(".records li").first()).toHaveAttribute(
+    "id",
+    "row-1201",
+  );
   await expect(page.locator("#row-1202")).toBeVisible();
-  await expect.poll(() => page.locator(".records li").evaluateAll(es =>
-    es.find(e => e.getBoundingClientRect().bottom > 0)?.id)).toBe(reloadFocus);
+  await expect
+    .poll(() =>
+      page
+        .locator(".records li")
+        .evaluateAll(
+          (es) => es.find((e) => e.getBoundingClientRect().bottom > 0)?.id,
+        ),
+    )
+    .toBe(reloadFocus);
 });
 
 test("描画前にフレームが進んでも戻る位置を復元する", async ({ page }) => {
   await page.goto("/?start=2026-11-10&end=2026-11-10&q=かたかな");
   await expect(page.locator(".records li")).toHaveCount(200);
   await expect(page).toHaveURL("/");
-  await expect(page.getByRole("radio", { name: "全期間" })).toBeChecked();
+  await expect(
+    page.getByLabel("開始日", { exact: true }).and(page.locator("input")),
+  ).toHaveValue("");
+  await expect(
+    page.getByLabel("終了日", { exact: true }).and(page.locator("input")),
+  ).toHaveValue("");
   await page.getByRole("button", { name: "さらに読み込む" }).click();
   await expect(page.locator(".records li")).toHaveCount(400);
-  await page.getByRole("radio", { name: "期間指定" }).check();
+  await page
+    .getByLabel("開始日", { exact: true })
+    .and(page.locator("input"))
+    .fill("2026-11-10");
+  await page
+    .getByLabel("終了日", { exact: true })
+    .and(page.locator("input"))
+    .fill("2026-11-10");
   await page.getByRole("searchbox").fill("");
   await page.locator(".records li").nth(300).scrollIntoViewIfNeeded();
   const focus = await page
@@ -218,6 +287,17 @@ test("IME・古い検索応答・検索クリア", async ({ page }) => {
   await page.waitForTimeout(400);
   expect(queries).not.toContain("がっこう");
   await search.dispatchEvent("compositionend");
+  expect(
+    await search.evaluate((input) => {
+      const event = new KeyboardEvent("keydown", {
+        key: "Enter",
+        keyCode: 229,
+        bubbles: true,
+        cancelable: true,
+      });
+      return input.dispatchEvent(event);
+    }),
+  ).toBe(false);
   expect(queries).not.toContain("がっこう");
   await search.press("Enter");
   await expect(page.locator(".records li")).toHaveCount(1);
@@ -278,10 +358,16 @@ test("保存文字列を実行せずDB・設定を配信しない", async ({ pag
     expect((await request.get(path)).status()).toBe(404);
 });
 
-test("未対応のSVGアイコンを配信せず外部画像にも接続しない", async ({ page }) => {
-  mutate("UPDATE icons SET mime='image/svg+xml', image=X'3C7376673E' WHERE site='example.test'");
+test("未対応のSVGアイコンを配信せず外部画像にも接続しない", async ({
+  page,
+}) => {
+  mutate(
+    "UPDATE icons SET mime='image/svg+xml', image=X'3C7376673E' WHERE site='example.test'",
+  );
   const remote: string[] = [];
-  page.on("request", (r) => { if (new URL(r.url()).hostname === "example.invalid") remote.push(r.url()); });
+  page.on("request", (r) => {
+    if (new URL(r.url()).hostname === "example.invalid") remote.push(r.url());
+  });
   await page.goto("/");
   await expect(page.locator(".favicon.fallback").first()).toBeVisible();
   await page.waitForLoadState("networkidle");
@@ -289,9 +375,7 @@ test("未対応のSVGアイコンを配信せず外部画像にも接続しな�
   expect(remote).toEqual([]);
 });
 
-test("追加取得と戻るで条件不一致・削除を再確認する", async ({
-  page,
-}) => {
+test("追加取得と戻るで条件不一致・削除を再確認する", async ({ page }) => {
   await page.goto("/");
   const search = page.getByRole("searchbox");
   await search.fill("かたかな");
@@ -331,8 +415,17 @@ test("範囲指定とキーワードは独立し実行時にだけ適用され�
   await run.click();
   await expect(page.getByText("該当する履歴がありません")).toBeVisible();
 
-  await page.getByRole("radio", { name: "全期間" }).check();
-  await expect(page.getByLabel("開始日")).toHaveCount(0);
+  await page
+    .getByLabel("開始日", { exact: true })
+    .and(page.locator("input"))
+    .fill("");
+  await page
+    .getByLabel("終了日", { exact: true })
+    .and(page.locator("input"))
+    .fill("");
+  await expect(
+    page.getByLabel("開始日", { exact: true }).and(page.locator("input")),
+  ).toHaveValue("");
   await expect(search).toHaveValue("かたかな 1200");
   await expect(page.getByText("該当する履歴がありません")).toBeVisible();
   await run.click();
@@ -342,36 +435,47 @@ test("範囲指定とキーワードは独立し実行時にだけ適用され�
   await search.fill(" ");
   await run.click();
   await expect(page.locator(".records li")).toHaveCount(200);
-  await expect(page.getByRole("heading", { name: "全期間", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "前日" })).toBeDisabled();
-  await expect(page.getByRole("button", { name: "翌日" })).toBeDisabled();
+  await expect(
+    page.getByRole("heading", { name: "全期間", exact: true }),
+  ).toBeVisible();
   await expect(page).toHaveURL("/");
-  expect(requests.map(url => new URL(url).searchParams.get("scope"))).toEqual(["range", "all", "all"]);
+  expect(requests.map((url) => new URL(url).searchParams.get("scope"))).toEqual(
+    ["range", "all", "all"],
+  );
   expect(new URL(requests[2]).searchParams.has("q")).toBe(false);
 
   await page.goBack();
   await expect(search).toHaveValue("かたかな 1200");
   await expect(page.locator("#row-1200")).toBeVisible();
   await page.goBack();
-  await expect(page.getByRole("radio", { name: "期間指定" })).toBeChecked();
-  await expect(page.getByLabel("開始日")).toHaveValue("2026-11-10");
+  await expect(
+    page.getByLabel("開始日", { exact: true }).and(page.locator("input")),
+  ).toHaveValue("2026-11-10");
   await expect(page.getByText("該当する履歴がありません")).toBeVisible();
 });
 
 test("旧日付リンクを読み込み不正な期間は適用しない", async ({ page }) => {
   await page.goto("/?start=2026-11-07&end=2026-11-08");
   await expect(page).toHaveURL("/");
-  await expect(page.getByRole("radio", { name: "期間指定" })).toBeChecked();
-  await expect(page.getByLabel("開始日")).toHaveValue("2026-11-07");
-  await expect(page.getByLabel("終了日")).toHaveValue("2026-11-08");
+  await expect(
+    page.getByLabel("開始日", { exact: true }).and(page.locator("input")),
+  ).toHaveValue("2026-11-07");
+  await expect(
+    page.getByLabel("終了日", { exact: true }).and(page.locator("input")),
+  ).toHaveValue("2026-11-08");
   await expect(page.getByText("該当する履歴がありません")).toBeVisible();
-  await expect(page.getByRole("button", { name: "前日" })).toBeDisabled();
-  await expect(page.getByRole("button", { name: "翌日" })).toBeDisabled();
-  await page.getByLabel("開始日").fill("2026-11-09");
+  await page
+    .getByLabel("開始日", { exact: true })
+    .and(page.locator("input"))
+    .fill("2026-11-09");
   await page.getByRole("button", { name: "検索", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "2026-11-07 – 2026-11-08" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "2026-11-07 – 2026-11-08" }),
+  ).toBeVisible();
   await page.reload();
-  await expect(page.getByLabel("開始日")).toHaveValue("2026-11-07");
+  await expect(
+    page.getByLabel("開始日", { exact: true }).and(page.locator("input")),
+  ).toHaveValue("2026-11-07");
 });
 
 for (const status of [200, 404]) {
@@ -426,8 +530,18 @@ test("今日をアプリのタイムゾーンで選び、同期後の再読み�
   );
   await page.goto("/");
   await expect(page.locator(".records li")).toHaveCount(1);
-  await page.getByRole("button", { name: "今日", exact: true }).click();
-  await expect(page.getByLabel("開始日")).toHaveValue(status.today);
+  await page
+    .getByRole("group", { name: "開始日", exact: true })
+    .getByRole("button", { name: "今日", exact: true })
+    .click();
+  await page
+    .getByRole("group", { name: "終了日", exact: true })
+    .getByRole("button", { name: "今日", exact: true })
+    .click();
+  await page.getByRole("button", { name: "検索", exact: true }).click();
+  await expect(
+    page.getByLabel("開始日", { exact: true }).and(page.locator("input")),
+  ).toHaveValue(status.today);
   await expect(
     page.getByText("今日の履歴はまだ取り込まれていません"),
   ).toBeVisible();
@@ -475,25 +589,34 @@ test("連続スクロールで履歴保存とレイアウト測定を繰り返�
 });
 
 test("収集停止・失敗・未設定を正常な空結果と区別する", async ({ page }) => {
-  mutate("UPDATE collection_settings SET value='0' WHERE key='enabled'; UPDATE sources SET state='failed',error='synthetic failure'");
+  mutate(
+    "UPDATE collection_settings SET value='0' WHERE key='enabled'; UPDATE sources SET state='failed',error='synthetic failure'",
+  );
   await page.goto("/");
   await page.getByText("収集状態", { exact: false }).click();
   await expect(page.getByText(/一時停止中/)).toBeVisible();
   await expect(page.getByText(/取得失敗/)).toBeVisible();
   await expect(page.locator(".records li")).toHaveCount(200);
-  mutate("DELETE FROM visits; DELETE FROM sources; UPDATE collection_settings SET value='1' WHERE key='enabled'");
+  mutate(
+    "DELETE FROM visits; DELETE FROM sources; UPDATE collection_settings SET value='1' WHERE key='enabled'",
+  );
   await page.reload();
-  await expect(page.getByText("保存対象が未設定です", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("保存対象が未設定です", { exact: true }),
+  ).toBeVisible();
 });
 
-test("changing language preserves the current view and restores focus after details", async ({ page }) => {
+test("changing language preserves the current view and restores focus after details", async ({
+  page,
+}) => {
   await page.goto("/");
   await expect(page.locator(".record").first()).toBeVisible();
   const location = page.url();
   await page.getByLabel("表示言語").selectOption("en");
   await expect(page.locator("html")).toHaveAttribute("lang", "en");
-  await expect(page.getByLabel("Start date")).toBeVisible();
-  await expect(page.getByRole("radio", { name: "Date range" })).toBeChecked();
+  await expect(
+    page.getByLabel("Start date", { exact: true }).and(page.locator("input")),
+  ).toBeVisible();
   expect(page.url()).toBe(location);
   const first = page.locator(".record").first();
   await first.focus();
@@ -505,29 +628,312 @@ test("changing language preserves the current view and restores focus after deta
   await expect(page.getByLabel("Language")).toHaveValue("en");
 });
 
-test("狭い画面でも日付と検索が横一列に収まり選択した日付が見える", async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 });
+test("日付の個別調整は編集のみで、解除は現在の全条件を適用する", async ({
+  page,
+}) => {
   await page.goto("/");
-  await showDay(page, "2026-11-10");
-  await expect(page.locator(".compact-date").first()).toHaveText("2026/11/10");
-  for (const [width, font, lang] of [[390, 16, "ja"], [320, 16, "ja"], [390, 22, "ja"], [320, 16, "en"]] as const) {
-    if (lang === "en") await page.getByLabel("表示言語").selectOption("en");
-    const start = page.getByLabel(lang === "ja" ? "開始日" : "Start date");
-    const end = page.getByLabel(lang === "ja" ? "終了日" : "End date");
-    const submit = page.getByRole("button", { name: lang === "ja" ? "検索" : "Search", exact: true });
-    await page.setViewportSize({ width, height: 844 });
-    await page.evaluate(size => { document.documentElement.style.fontSize = size + "px"; }, font);
-    const a = (await start.boundingBox())!;
-    const b = (await end.boundingBox())!;
-    const button = (await submit.boundingBox())!;
-    expect(b.x).toBeGreaterThanOrEqual(a.x + a.width);
-    expect(b.x + b.width).toBeLessThanOrEqual(width);
-    expect(button.x).toBeGreaterThanOrEqual(b.x + b.width);
-    // With enlarged text the button can grow taller. Its center must stay in the date row.
-    expect(button.y + button.height / 2).toBeGreaterThan(a.y);
-    expect(button.y + button.height / 2).toBeLessThan(a.y + a.height);
-    const clipped = await page.locator(".compact-date").evaluateAll(nodes => nodes.some(node => node.scrollWidth > node.clientWidth));
-    expect(clipped).toBe(false);
-    expect(button.x + button.width).toBeLessThanOrEqual(width);
+  await expect(page.locator(".records li")).toHaveCount(200);
+  const start = page
+    .getByLabel("開始日", { exact: true })
+    .and(page.locator("input"));
+  const end = page
+    .getByLabel("終了日", { exact: true })
+    .and(page.locator("input"));
+  const keyword = page.getByRole("searchbox");
+  const requests: string[] = [];
+  page.on("request", (r) => {
+    if (r.url().includes("/api/records?")) requests.push(r.url());
+  });
+  await page
+    .getByRole("group", { name: "開始日", exact: true })
+    .getByRole("button", { name: "前日", exact: true })
+    .click();
+  await expect(start).toHaveValue("2026-11-09");
+  await expect(end).toHaveValue("2026-11-10");
+  await keyword.fill("かたかな");
+  await expect(
+    page.getByText("条件変更あり・検索で反映", { exact: true }),
+  ).toBeVisible();
+  expect(requests).toHaveLength(0);
+  await page.getByRole("button", { name: "終了日を解除", exact: true }).click();
+  await expect(page.locator(".result-scope")).toHaveText("2026-11-09 以降");
+  await expect(end).toHaveValue("");
+  await expect(keyword).toHaveValue("かたかな");
+  expect(new URL(requests.at(-1)!).searchParams.get("start")).toBe(
+    "2026-11-09",
+  );
+  expect(new URL(requests.at(-1)!).searchParams.has("end")).toBe(false);
+  await expect(
+    page
+      .getByRole("group", { name: "終了日", exact: true })
+      .getByRole("button", { name: "翌日", exact: true }),
+  ).toBeDisabled();
+  await end.fill("2026-11-10");
+  await page.getByRole("button", { name: "開始日を解除", exact: true }).click();
+  await expect(page.locator(".result-scope")).toHaveText("2026-11-10 まで");
+  await start.fill("2026-11-09");
+  await page
+    .getByRole("button", { name: "キーワードを解除", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", {
+      name: "2026-11-09 – 2026-11-10",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(keyword).toHaveValue("");
+  await expect(
+    page.getByRole("button", { name: "検索", exact: true }),
+  ).toBeFocused();
+  await expect(page).toHaveURL("/");
+});
+
+test("不正な期間での解除は入力と前回結果を保持する", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator(".records li")).toHaveCount(200);
+  await page
+    .getByLabel("開始日", { exact: true })
+    .and(page.locator("input"))
+    .fill("2026-11-12");
+  await page.getByRole("searchbox").fill("edit");
+  await page
+    .getByRole("button", { name: "キーワードを解除", exact: true })
+    .click();
+  await expect(page.getByRole("alert")).toHaveText(
+    "終了日は開始日以降にしてください。",
+  );
+  await expect(
+    page.getByLabel("終了日", { exact: true }).and(page.locator("input")),
+  ).toBeFocused();
+  await expect(page.getByRole("searchbox")).toHaveValue("");
+  await expect(
+    page.getByLabel("開始日", { exact: true }).and(page.locator("input")),
+  ).toHaveValue("2026-11-12");
+  await expect(page.locator(".records li")).toHaveCount(200);
+  await expect(
+    page.getByRole("heading", { name: "2026-11-10", exact: true }),
+  ).toBeVisible();
+});
+
+test("検索中と失敗時は前回結果を保ち、追加入力を上書きしない", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await expect(page.locator(".records li")).toHaveCount(200);
+  const before = await page.evaluate(() => history.length);
+  const gate = deferred(),
+    received = deferred();
+  await page.route("**/api/records?**", async (route) => {
+    const q = new URL(route.request().url()).searchParams.get("q");
+    if (q === "failure") {
+      await route.fulfill({
+        status: 503,
+        json: { detail: "履歴を読み取れません。" },
+      });
+      return;
+    }
+    if (q !== "がっこう") {
+      await route.continue();
+      return;
+    }
+    const response = await route.fetch();
+    received.resolve();
+    await gate.promise;
+    await route.fulfill({ response });
+  });
+  const keyword = page.getByRole("searchbox");
+  try {
+    await keyword.fill("がっこう");
+    await keyword.press("Enter");
+    await received.promise;
+    await expect(page.locator(".records li")).toHaveCount(200);
+    await expect(
+      page.getByRole("heading", { name: "2026-11-10", exact: true }),
+    ).toBeVisible();
+    await keyword.fill("次の入力");
+    gate.resolve();
+    await expect(page.locator(".records li")).toHaveCount(1);
+    await expect(
+      page.getByRole("heading", { name: /「がっこう」の検索結果/ }),
+    ).toBeVisible();
+    await expect(keyword).toHaveValue("次の入力");
+    await expect(
+      page.getByText("条件変更あり・検索で反映", { exact: true }),
+    ).toBeVisible();
+    await keyword.fill("failure");
+    await keyword.press("Enter");
+    await expect(page.getByRole("alert")).toHaveText("履歴を読み取れません。");
+    await expect(page.locator(".records li")).toHaveCount(1);
+    await expect(keyword).toHaveValue("failure");
+    expect(await page.evaluate(() => history.length)).toBe(before + 1);
+    await page.reload();
+    await expect(keyword).toHaveValue("がっこう");
+    await expect(page.locator(".records li")).toHaveCount(1);
+  } finally {
+    gate.resolve();
+  }
+});
+
+test("空結果も履歴に残し、未検索の編集は復元しない", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator(".records li")).toHaveCount(200);
+  const keyword = page.getByRole("searchbox");
+  await keyword.fill("no-match-635");
+  await keyword.press("Enter");
+  await expect(
+    page.getByText("該当する履歴がありません", { exact: true }),
+  ).toBeVisible();
+  await keyword.fill("がっこう");
+  await keyword.press("Enter");
+  await expect(page.locator(".records li")).toHaveCount(1);
+  await page.goBack();
+  await expect(keyword).toHaveValue("no-match-635");
+  await expect(
+    page.getByText("該当する履歴がありません", { exact: true }),
+  ).toBeVisible();
+  await page
+    .getByLabel("開始日", { exact: true })
+    .and(page.locator("input"))
+    .fill("2026-11-01");
+  await keyword.fill("not-submitted");
+  await page.reload();
+  await expect(keyword).toHaveValue("no-match-635");
+  await expect(
+    page.getByLabel("開始日", { exact: true }).and(page.locator("input")),
+  ).toHaveValue("2026-11-10");
+  await expect(
+    page.getByText("該当する履歴がありません", { exact: true }),
+  ).toBeVisible();
+});
+
+test("日英・狭幅・文字拡大でも整列と操作領域を保つ", async ({
+  page,
+}, testInfo) => {
+  await page.goto("/");
+  await expect(page.locator(".records li")).toHaveCount(200);
+  for (const lang of ["ja", "en"]) {
+    await page.locator(".mast select").selectOption(lang);
+    for (const [width, font] of [
+      [390, 16],
+      [430, 16],
+      [320, 16],
+      [390, 32],
+      [1000, 16],
+    ]) {
+      await page.setViewportSize({ width, height: 1000 });
+      await page.evaluate((size) => {
+        document.documentElement.style.fontSize = size + "px";
+      }, font);
+      const fields = page.locator(".date-field");
+      const a = (await fields.nth(0).boundingBox())!,
+        b = (await fields.nth(1).boundingBox())!;
+      if (width >= 390 && font === 16) {
+        expect(Math.abs(a.y - b.y)).toBeLessThan(1);
+        expect(Math.abs(a.width - b.width)).toBeLessThan(1);
+        for (const selector of ["label", ".date-steps", ".date-shell"]) {
+          const c = (await fields.nth(0).locator(selector).boundingBox())!,
+            d = (await fields.nth(1).locator(selector).boundingBox())!;
+          expect(Math.abs(c.y - d.y)).toBeLessThan(1);
+          expect(Math.abs(c.height - d.height)).toBeLessThan(1);
+        }
+      } else expect(b.y).toBeGreaterThanOrEqual(a.y + a.height);
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth <= innerWidth,
+        ),
+        `${lang}, width=${width}, font=${font}`,
+      ).toBe(true);
+      const targets = await page
+        .locator(
+          ".search-form button, .reload, .source-status summary, select, .search-form input",
+        )
+        .evaluateAll((elements) =>
+          elements.map((element) => {
+            const box = element.getBoundingClientRect();
+            let top = box.top,
+              bottom = box.bottom,
+              width = box.width;
+            if (element.matches("button, summary")) {
+              const style = getComputedStyle(element),
+                after = getComputedStyle(element, "::after");
+              top = Math.min(
+                top,
+                box.top +
+                  parseFloat(style.borderTopWidth) +
+                  parseFloat(after.top),
+              );
+              bottom = Math.max(
+                bottom,
+                box.bottom -
+                  parseFloat(style.borderBottomWidth) -
+                  parseFloat(after.bottom),
+              );
+            } else if (element instanceof HTMLSelectElement) {
+              const label = element.closest("label")!;
+              const labelBox = label.getBoundingClientRect();
+              top = labelBox.top;
+              bottom = labelBox.bottom;
+              width = labelBox.width;
+            }
+            const hitAt = (y: number) => {
+              const hit = document.elementFromPoint(box.x + box.width / 2, y);
+              return (
+                !!hit &&
+                (element.contains(hit) ||
+                  (element instanceof HTMLSelectElement &&
+                    element.closest("label")!.contains(hit)))
+              );
+            };
+            return {
+              name:
+                element.getAttribute("aria-label") ||
+                element.id ||
+                element.textContent?.trim().slice(0, 24),
+              width,
+              height: bottom - top,
+              hit: hitAt(top + 0.5) && hitAt(bottom - 0.5),
+            };
+          }),
+        );
+      const touch = await page.evaluate(
+        () => matchMedia("(pointer: coarse)").matches,
+      );
+      for (const target of targets) {
+        expect(target.width).toBeGreaterThanOrEqual(touch ? 43.99 : 23.99);
+        expect(target.height).toBeGreaterThanOrEqual(touch ? 43.99 : 23.99);
+        if (width === 390 && font === 16)
+          expect(target.hit, target.name).toBe(true);
+      }
+      expect(
+        await page
+          .locator(".date-value > span")
+          .evaluateAll((nodes) =>
+            nodes.some((n) => n.scrollWidth > n.clientWidth),
+          ),
+      ).toBe(false);
+      const firstInput = (await page.locator("#date-start").boundingBox())!;
+      const clear = (await fields
+        .nth(0)
+        .locator(".field-clear")
+        .boundingBox())!;
+      expect(firstInput.x + firstInput.width).toBeLessThanOrEqual(clear.x + 1);
+      if (width === 390 && font === 16) {
+        expect((await page.locator(".records").boundingBox())!.y).toBeLessThan(
+          440,
+        );
+        for (const control of await page
+          .locator(
+            ".date-shell, .keyword-shell, .search-submit, .date-steps button",
+          )
+          .all()) {
+          expect((await control.boundingBox())!.height).toBeLessThanOrEqual(
+            40.1,
+          );
+        }
+        await page.screenshot({
+          path: testInfo.outputPath(`form-${lang}.png`),
+        });
+      }
+    }
   }
 });
