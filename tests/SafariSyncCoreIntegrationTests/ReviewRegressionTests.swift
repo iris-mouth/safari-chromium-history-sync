@@ -45,7 +45,6 @@ enum ReviewRegressionTests {
             try fixture.insertSafariVisit(url: "https://example.com/anchor")
             let original = CloudDeliveryTests.service(fixture)
             _ = try original.selectProfile(CloudDeliveryTests.profile)
-            // The durable state at a crash immediately before the external write.
             try rewriteState(fixture) { state in
                 var cloud = CloudDeliveryCoordinator()
                 try cloud.reserve(id: "pending-at-crash", profileID: CloudDeliveryTests.profile, provider: .safari,

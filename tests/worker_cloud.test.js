@@ -298,7 +298,6 @@ test("an upgraded worker drains a legacy pending ACK before negotiating cloud tr
   const native = chrome.runtime.sendNativeMessage;
   chrome.runtime.sendNativeMessage = async (host, message) => {
     if (message.operation === "ack") {
-      // A capable client may still ACK an untracked event from the previous Agent.
       assert.equal(message.localReceipts, undefined);
     }
     return native(host, message);

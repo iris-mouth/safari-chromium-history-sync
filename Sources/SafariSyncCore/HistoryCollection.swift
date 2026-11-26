@@ -48,8 +48,6 @@ public enum HistoryCollectionError: Error {
     case sqlite(String)
 }
 
-/// Owns the viewing database. This object never accesses sync state or queues.
-/// All mutations are serialized; each source can fail without affecting others.
 public final class HistoryCollector: @unchecked Sendable {
     private let lock = NSLock()
     private let cancellationLock = NSLock()
@@ -75,7 +73,6 @@ public final class HistoryCollector: @unchecked Sendable {
         let version = try db.scalarInt("PRAGMA user_version")
         guard (0...5).contains(version) else { throw HistoryCollectionError.incompatibleDatabase }
         if version == 0 {
-            // Refuse to initialize an unrelated or partially-created database.
             guard try db.scalarInt("SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'") == 0 else {
                 throw HistoryCollectionError.incompatibleDatabase
             }
@@ -207,8 +204,6 @@ public final class HistoryCollector: @unchecked Sendable {
         }
     }
 
-    /// Keep earlier product addresses excluded after a Serve cutover. Including
-    /// the current value also migrates databases made before this list existed.
     private func storedViewerOrigins() throws -> [String] {
         let statement = try db.prepare("SELECT key,value FROM collection_settings WHERE key IN ('viewer_origin','viewer_origin_history')")
         var origins = Set<String>()
@@ -378,7 +373,6 @@ public final class HistoryCollector: @unchecked Sendable {
             try self.db.transaction {
                 try self.db.prepare("DELETE FROM scan_visits WHERE source_id=?").run([.text(source.id)])
                 if firstImport && previousIdentity != nil && previousIdentity != identity {
-                    // An unfinished first import cannot combine two DB generations.
                     try self.db.prepare("DELETE FROM visits WHERE source_id=?").run([.text(source.id)])
                     generation = UUID().uuidString
                 }
@@ -424,8 +418,6 @@ public final class HistoryCollector: @unchecked Sendable {
                 }
             }
             if source.browser == .chromium, try db.scalarInt("SELECT EXISTS(SELECT 1 FROM removal_cutoffs)") != 0 {
-                // Browser removal notifications can precede the native DB commit.
-                // Retire a cutoff only after a complete snapshot confirms absence.
                 try db.prepare("""
                     DELETE FROM removal_cutoffs WHERE source=? AND NOT EXISTS(
                       SELECT 1 FROM scan_visits n WHERE n.source_id=source AND (removal_cutoffs.url='' OR removal_cutoffs.url=n.url)

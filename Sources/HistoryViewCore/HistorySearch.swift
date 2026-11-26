@@ -1,7 +1,6 @@
 import CUnicode
 import Foundation
 
-/// The same normalization is used for indexing and query terms.
 public enum HistorySearch {
     public static func normalize(_ text: String) -> String {
         // NFKC is compatibility decomposition followed by canonical composition.

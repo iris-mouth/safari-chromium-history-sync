@@ -161,7 +161,6 @@ enum HistoryCollectionTests {
         try collector.setViewerOrigin("https://viewer.example.test:8443/")
         try collector.collectAll()
         try expect(try count(target, "SELECT count(*) FROM visits"), 2, "current viewer URL is excluded")
-        // Simulate the existing schema, which stores only the current origin.
         var db: OpaquePointer?
         guard sqlite3_open(target.path, &db) == SQLITE_OK, let db else { throw IntegrationFailure.assertion("open origin fixture") }
         guard sqlite3_exec(db, "DELETE FROM collection_settings WHERE key='viewer_origin_history'", nil, nil, nil) == SQLITE_OK,

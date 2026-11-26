@@ -775,7 +775,6 @@ struct SafariSyncCoreIntegrationTests {
         } catch let failure as IntegrationFailure {
             throw failure
         } catch {
-            // Expected: the Bridge and Menu must fail closed instead of reading a broad file.
         }
     }
 

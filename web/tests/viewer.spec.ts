@@ -158,7 +158,6 @@ test("正規化検索・日付表示との往復・位置復元・再読み込�
     .evaluateAll(
       (es) => es.find((e) => e.getBoundingClientRect().bottom > 0)?.id,
     );
-  // Submit the public HTML form without scrolling the reading position away first.
   await page
     .locator("form")
     .evaluate((form: HTMLFormElement) => form.requestSubmit());
@@ -252,7 +251,6 @@ test("描画前にフレームが進んでも戻る位置を復元する", async
     .evaluate((form: HTMLFormElement) => form.requestSubmit());
   await expect(page.getByRole("searchbox")).toHaveValue("");
   await expect(page.locator(".records li")).toHaveCount(200);
-  // Force a frame before React's scheduled commit, as observed on a busy runner.
   await page.evaluate(() => {
     window.requestAnimationFrame = (callback) => {
       queueMicrotask(() => callback(performance.now()));

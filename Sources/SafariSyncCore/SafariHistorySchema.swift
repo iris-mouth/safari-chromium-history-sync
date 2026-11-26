@@ -4,9 +4,6 @@ import Foundation
 public enum SafariHistorySchema: String, Sendable {
     case historyV1 = "safari-history-v1"
 
-    // Data-free reference captured independently in tests/fixtures/safari-history-v1.sql.
-    // SQLite interprets this definition; runtime matching compares PRAGMA metadata,
-    // not DDL text or SQL whitespace. Keep the original test fixture independent.
     private static let referenceSQL = """
     CREATE TABLE history_items (id INTEGER PRIMARY KEY AUTOINCREMENT,url TEXT NOT NULL UNIQUE,domain_expansion TEXT NULL,visit_count INTEGER NOT NULL,daily_visit_counts BLOB NOT NULL,weekly_visit_counts BLOB NULL,autocomplete_triggers BLOB NULL,should_recompute_derived_visit_counts INTEGER NOT NULL,visit_count_score INTEGER NOT NULL,status_code INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE history_visits (id INTEGER PRIMARY KEY AUTOINCREMENT,history_item INTEGER NOT NULL REFERENCES history_items(id) ON DELETE CASCADE,visit_time REAL NOT NULL,title TEXT NULL,load_successful BOOLEAN NOT NULL DEFAULT 1,http_non_get BOOLEAN NOT NULL DEFAULT 0,synthesized BOOLEAN NOT NULL DEFAULT 0,redirect_source INTEGER NULL UNIQUE REFERENCES history_visits(id) ON DELETE CASCADE,redirect_destination INTEGER NULL UNIQUE REFERENCES history_visits(id) ON DELETE CASCADE,origin INTEGER NOT NULL DEFAULT 0,generation INTEGER NOT NULL DEFAULT 0,attributes INTEGER NOT NULL DEFAULT 0,score INTEGER NOT NULL DEFAULT 0);
@@ -66,9 +63,6 @@ public enum SafariHistorySchema: String, Sendable {
             for index in try rows(db, "PRAGMA index_list(\(quoted))") {
                 guard let name = index[1] else { throw SafariHistoryError.incompatibleSchema("unnamed index") }
                 let keys = try rows(db, "PRAGMA index_xinfo(\(quote(name)))").filter { $0[5] == "1" }
-                // Plain nonunique indexes may be added, renamed or removed. They
-                // affect performance, not accepted writes. Expressions/partial
-                // indexes remain unsupported because they add unmodeled behavior.
                 guard index[4] == "0", keys.allSatisfy({ $0[1] != "-2" && $0[2] != nil }) else {
                     throw SafariHistoryError.incompatibleSchema("unsupported index on \(table)")
                 }
@@ -110,7 +104,6 @@ public enum SafariHistorySchema: String, Sendable {
     }
 
     private static func sqlWords(_ sql: String) throws -> [String] {
-        // Remove comments and quoted tokens before identifying DDL-only features.
         let ignored = try NSRegularExpression(pattern: #"(?s)--[^\n]*(?:\n|$)|/\*.*?\*/|'(?:''|[^'])*'|"(?:""|[^"])*"|`(?:``|[^`])*`|\[[^\]]*\]"#)
         let stripped = ignored.stringByReplacingMatches(in: sql, range: NSRange(sql.startIndex..., in: sql), withTemplate: " ")
         return stripped.lowercased().split { !$0.isLetter && $0 != "_" }.map(String.init)

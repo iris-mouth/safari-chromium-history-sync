@@ -135,7 +135,6 @@ public final class AgentService: @unchecked Sendable {
                 claimedIDs.contains($0.id) && $0.profileID == message.profileID
                     && $0.kind != "relay" && !state.cloud.isCurrent($0)
             }) {
-                // A rebind can cancel a probe/replay while the worker is awaiting its ACK.
                 return try encode(.failure(TypedError(code: "CLOUD_DELIVERY_CANCELLED")))
             }
 
@@ -151,7 +150,6 @@ public final class AgentService: @unchecked Sendable {
                     try state.cloud.reserve(id: event.eventID, profileID: message.profileID,
                         provider: .safari, url: event.url, now: .now, title: event.title)
                 }
-                // Keep the cloud obligation even if insertion succeeds just before a crash.
                 try persist(state)
                 let identity = try history.cloudSnapshot(deliveries: []).databaseIdentity
                 for event in events {
@@ -242,15 +240,12 @@ public final class AgentService: @unchecked Sendable {
                 let hasClaimedRecovery = state.recovery.contains { $0.profileID == message.profileID
                     && (claimedIDs.isEmpty || claimedIDs.contains($0.eventID)) }
                 if !hasPendingPrefix, !hasClaimedRecovery, through < state.nextSafariSequence {
-                    // Handled/cancelled prefix after detailed evidence expired: no new receipt is inferred.
                     return try encode(.receipt(status: "ACKNOWLEDGED", throughSequence: through))
                 }
                 let acknowledgedRecoveryIDs = Set(state.outbox.filter {
                     $0.profileID == message.profileID && $0.sequence <= through
                 }.map(\.eventID))
                 if message.capabilities?.contains("cloud-delivery-v1") == true {
-                    // Capability advertisement does not retroactively track legacy deliveries.
-                    // Require cloud receipts only for events reserved by a capable pull.
                     let expected = state.outbox.filter { entry in
                         entry.profileID == message.profileID && entry.sequence <= through
                             && state.cloud.deliveries.contains { $0.id == entry.eventID
@@ -366,8 +361,6 @@ public final class AgentService: @unchecked Sendable {
         try lock.withLock {
             var state = try persistence.load() ?? State()
             guard state.pairRevision != revision else { return }
-            // The first launch of an upgrade must preserve the old stopped queue
-            // until the user explicitly confirms the new configuration.
             if onStartup && state.pairRevision == nil { return }
             for old in Set(state.cloud.deliveries.map(\.profileID)) { state.cloud.cancelPair(old) }
             state.pairRevision = revision
@@ -638,7 +631,6 @@ public final class AgentService: @unchecked Sendable {
     public func pollCloud(now: Date = .now, safariIsRunning: Bool,
                           assistSafari: (URL) -> String = { _ in "unavailable" },
                           launchSafari: () throws -> Bool) throws {
-        // Reserve durably under the lock; slow application events must not block IPC.
         let work: (batch: [CloudDelivery], launch: Bool, assist: URL?)? = try lock.withLock {
             var state = try persistence.load() ?? State()
             guard state.enabled, (try collector == nil || collector?.pair()?.since != nil), let profile = state.activeProfileID else { return nil }
@@ -670,7 +662,6 @@ public final class AgentService: @unchecked Sendable {
         }
     }
 
-    /// Runtime dispatch exposes this interface only to authenticated Menu requests.
     public func cloudCommand(_ command: MenuCommand, now: Date = .now) throws -> CloudDiagnostics {
         try lock.withLock {
             var state = try persistence.load() ?? State()
@@ -694,7 +685,6 @@ public final class AgentService: @unchecked Sendable {
                 try state.cloud.reserve(id: id, profileID: profile, provider: provider,
                     url: url, now: now, kind: "probe")
                 if provider == .browser { enqueueCloudDelivery(id: id, url: url, profileID: profile, state: &state) }
-                // Durable intent precedes Safari writes and survives Menu/Agent restart.
                 try persist(state)
                 try applyQueuedSafariDeliveries(state: &state, now: now)
             case "cloudObserve":
@@ -703,7 +693,6 @@ public final class AgentService: @unchecked Sendable {
                 }
                 try state.cloud.observeRemote(id: id, profileID: profile, result: result, device: device, now: now)
             case "cloudPrepareReplay", "cloudExecuteReplay":
-                // Recheck owned Safari rows before presenting or executing a replay.
                 let rows = state.cloud.deliveries.filter { $0.profileID == profile && $0.provider == .safari
                     && $0.localAppliedAt != nil && state.cloud.isCurrent($0) }
                 if !rows.isEmpty {

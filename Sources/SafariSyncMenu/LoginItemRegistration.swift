@@ -19,7 +19,6 @@ enum LoginItemRegistration {
         case .notRegistered, .notFound:
             do { try register() }
             catch {
-                // Registration can race with a system-settings change.
                 switch status() {
                 case .enabled: return .ready
                 case .requiresApproval: return .requiresApproval

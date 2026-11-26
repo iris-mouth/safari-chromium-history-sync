@@ -1,6 +1,5 @@
 #!/bin/sh
 set -eu
-# Older receipts include a sibling Agent. Leave unrelated or changed apps alone.
 old="$3/Applications/Safari Chromium History Sync Agent.app"
 [ -e "$old" ] || exit 0
 [ ! -L "$old" ] || exit 1

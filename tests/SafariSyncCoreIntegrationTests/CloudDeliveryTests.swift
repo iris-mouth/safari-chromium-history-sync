@@ -96,7 +96,6 @@ enum CloudDeliveryTests {
         func poll(_ seconds: Double, running: Bool = true) throws {
             try agent.pollCloud(now: applied.addingTimeInterval(seconds), safariIsRunning: running,
                 assistSafari: { url in
-                    // IPC remains responsive while Safari handles an application event.
                     _ = try? agent.status()
                     controls.append(url)
                     return "tabReused"
@@ -312,7 +311,6 @@ enum CloudDeliveryTests {
         _ = try first.selectProfile(profile)
         try publish(first)
         let original = try diagnostics(first).deliveries[0]
-        // Reconstruct the saved intent at the DB-commit/journal-commit crash boundary.
         let key = SymmetricKey(data: SHA256.hash(data: secret + Data("agent-state-v1".utf8)))
         let box = try AES.GCM.SealedBox(combined: Data(contentsOf: fixture.stateURL))
         var state = try JSONSerialization.jsonObject(with: AES.GCM.open(box, using: key)) as! [String: Any]

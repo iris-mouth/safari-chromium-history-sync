@@ -58,7 +58,6 @@ async function resolveDirtyVisits() {
   const state = await runtimeState();
   for (const url of Object.keys(state.dirtyUrls)) {
     if (hasPendingImport(state.pendingEvidence, url)) continue;
-    // A persisted import marker may be older than the bounded outcome-evidence window.
     const visits = [...await chrome.history.getVisits({ url })].sort(visitSort);
     const marker = state.visitMarkers[url];
     const dirty = state.dirtyUrls[url];
@@ -134,12 +133,10 @@ async function applySafariPage(state, page) {
   };
   state.cloudOwnedUrls ??= {};
   state.cloudOwnedUrls[event.url] = requestedAt;
-  // Persist the request intent before invoking the non-idempotent browser writer.
   await saveRuntime(state);
   try {
     await chrome.history.addUrl({ url: event.url });
   } catch {
-    // A rejected request is still resolved by fresh history evidence below.
   }
   if (Object.keys(state.pendingEvidence).length) {
     setTimeout(() => exclusively(() => verifyEvidence()).catch(console.error), 1_000);
@@ -160,8 +157,6 @@ async function pullSafariPage(state) {
     state.agentCloudTracking = page.capabilities?.includes("cloud-delivery-v1") === true;
     await saveRuntime(state);
     if (state.agentCloudTracking && state.removalEvents?.length) {
-      // Negotiation may have just enabled cancellation reporting. Discard this
-      // page and fetch it again only after the Agent has processed the cutoffs.
       await reportRemovals(state);
       return;
     }
@@ -203,7 +198,6 @@ export async function verifyEvidence() {
         eventId, sequence: pending.sequence,
         visitId: String(evidence.visitId), visitTime: evidence.visitTime,
       };
-      // Keep both the exact receipt and echo marker across a lost ACK response/restart.
       await saveRuntime(state);
       const response = await sendNative({
         version: PROTOCOL_VERSION,
@@ -218,8 +212,6 @@ export async function verifyEvidence() {
       pending.attempt += 1;
       pending.dueAt = pending.requestedAt + EVIDENCE_DELAYS[pending.attempt - 1];
     } else if (pending.deliveryAttempt < 2) {
-      // Re-read the exact stream position before another non-idempotent write.
-      // Rebind/removal can cancel an intent while its first evidence cycle is pending.
       const page = await sendNative({
         version: PROTOCOL_VERSION, operation: "pull", stream: "safariToBrowser",
         profileId: state.profileId, afterSequence: pending.sequence - 1, limit: 1,
@@ -242,7 +234,6 @@ export async function verifyEvidence() {
       try {
         await chrome.history.addUrl({ url: pending.url });
       } catch {
-        // The following evidence cycle decides the outcome after a rejected call.
       }
     } else {
       const response = await sendNative({
@@ -271,8 +262,6 @@ async function recordRemoval(details, removedAt) {
     state.dirtyUrls = {};
     state.cloudOwnedUrls = {};
   } else {
-    // Only the Agent knows every reserved queued/recovery URL, including events
-    // beyond the first item in a fetched page. It filters these against its journal.
     let batch = [];
     let bytes = 1024;
     for (const url of urls) {
@@ -298,8 +287,6 @@ async function recordRemoval(details, removedAt) {
 
 async function reportRemovals(state, sync = true) {
 
-  // Bound each turn's IPC work, but never let another writer overtake any
-  // remaining cancellation batch, including a failed or lost response.
   for (let sent = 0; sent < REMOVAL_BATCHES_PER_EXCHANGE && state.removalEvents?.length; sent++) {
     const removal = state.removalEvents[0];
     const removed = await sendNative({version: PROTOCOL_VERSION, operation: "collectRemoval", profileId: state.profileId,

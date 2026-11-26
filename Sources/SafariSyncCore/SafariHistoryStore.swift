@@ -112,7 +112,6 @@ public final class SafariHistoryStore: @unchecked Sendable {
         }
     }
 
-    /// Check the source anchor and requested visits in a single native read snapshot.
     func currentVisits(_ visits: [(id: Int64, url: URL, milliseconds: Double)],
                        cursor: SafariArrivalCursor, authenticationKey: Data) throws -> Set<Int64> {
         try lock.withLock {
@@ -260,7 +259,6 @@ public final class SafariHistoryStore: @unchecked Sendable {
             defer { db.close() }
             try db.exec("BEGIN IMMEDIATE")
             do {
-                // Hold the write transaction while checking the schema and inserting.
                 try validateSchema(db)
                 if let cursor {
                     guard cursor.databaseIdentity == (try databaseIdentity()) else {

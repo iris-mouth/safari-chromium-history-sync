@@ -1,8 +1,6 @@
 import Foundation
 import SafariSyncCore
 
-// Development-only benchmark worker. The browser fixture is synthetic and the
-// writer stays open while the separately launched Viewer reads the database.
 let args = CommandLine.arguments
 guard args.count == 3 else { exit(64) }
 do {

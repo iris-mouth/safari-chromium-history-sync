@@ -41,8 +41,6 @@ private final class AgentRuntime: @unchecked Sendable {
 
         let stateSecret: Data
         #if DEBUG
-        // Only isolated debug fixtures may bypass Keychain; release builds do
-        // not contain this path and always use the existing Keychain boundary.
         let temporaryRoot = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().path + "/"
         let testSecret = ProcessInfo.processInfo.environment["SAFARI_SYNC_SYNTHETIC_TEST"] == "1"
             && runtimeDirectory.resolvingSymlinksInPath().path.hasPrefix(temporaryRoot)
@@ -88,8 +86,6 @@ private final class AgentRuntime: @unchecked Sendable {
             block(AgentIssueCode.stateUnreadable)
             return
         }
-        // Keep the encrypted sync preference adjustable even if Safari access
-        // is currently blocked; browser exchange still requires ready state.
         lock.withLock { service = readyService; self.history = history }
         do {
             try history.validateAccessAndSchema()
@@ -194,7 +190,6 @@ private final class AgentRuntime: @unchecked Sendable {
     private func discover(_ collector: HistoryCollector) throws -> CollectionCandidates {
             var home = FileManager.default.homeDirectoryForCurrentUser
             #if DEBUG
-            // Process tests use an isolated synthetic home, never real profiles.
             let temporaryRoot = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().path + "/"
             if ProcessInfo.processInfo.environment["SAFARI_SYNC_SYNTHETIC_TEST"] == "1",
                runtimeDirectory.resolvingSymlinksInPath().path.hasPrefix(temporaryRoot),
@@ -430,7 +425,6 @@ private final class AgentRuntime: @unchecked Sendable {
                 try service.pollCloud(safariIsRunning: !NSRunningApplication
                     .runningApplications(withBundleIdentifier: "com.apple.Safari").isEmpty,
                     assistSafari: SafariSyncAssistDriver.perform) {
-                    // Never quit/recycle a running user-owned Safari process.
                     guard NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.Safari").isEmpty else {
                         return false
                     }
@@ -459,8 +453,6 @@ if CommandLine.arguments.contains("--validate-safari-assist-script") {
     exit(SafariSyncAssistDriver.validate() ? 0 : 1)
 }
 
-// A Menu-owned Agent cannot outlive a quit, crash, or delayed app launch.
-// Debug fixtures may omit this argument; packaged builds always require it.
 let ownerIndex = CommandLine.arguments.firstIndex(of: "--menu-pid")
 let ownerPID: Int32? = ownerIndex.flatMap { index in
     guard index + 1 < CommandLine.arguments.count, let value = Int32(CommandLine.arguments[index + 1]), value > 1, value != getpid() else { return nil }
@@ -585,7 +577,6 @@ do {
             }
         }
     }
-    // Keep the main run loop free for Safari Apple events and macOS consent UI.
     NSApplication.shared.setActivationPolicy(.accessory)
     NSApplication.shared.run()
 } catch {

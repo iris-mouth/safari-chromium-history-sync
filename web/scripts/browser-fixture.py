@@ -1,4 +1,3 @@
-"""Synthetic Viewer fixture. Python is used only by the development tests."""
 import os
 import sqlite3
 import struct

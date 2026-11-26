@@ -1,6 +1,5 @@
 import Foundation
 
-/// Opt-in state stored in the same sealed journal as delivery obligations.
 public struct SafariSyncAssist: Codable, Equatable, Sendable {
     public static let minimumInterval: TimeInterval = 300
     public static let observationInterval: TimeInterval = 60
@@ -37,7 +36,6 @@ public struct SafariSyncAssist: Codable, Equatable, Sendable {
         hasPending = try values.decodeIfPresent(Bool.self, forKey: .hasPending) ?? false
         checkpoint = try values.decodeIfPresent(Int64.self, forKey: .checkpoint)
         databaseIdentity = try values.decodeIfPresent(String.self, forKey: .databaseIdentity)
-        // Build 611's daily reservation array is deliberately retired, but its cooldown survives.
         nextAttemptAt = try values.decodeIfPresent(Date.self, forKey: .nextAttemptAt)
             ?? (values.contains(.attemptsWithoutProgress) ? nil : lastAttempt?.addingTimeInterval(Self.minimumInterval))
     }
@@ -81,12 +79,10 @@ public struct SafariSyncAssist: Codable, Equatable, Sendable {
         self.databaseIdentity = databaseIdentity
     }
 
-    /// Receiver evidence may resolve the last obligation between native polls.
     public mutating func resolveBacklog() {
         hasPending = false
         attemptsWithoutProgress = 0
         nextAttemptAt = nil
-        // Keep lastAttempt so new work cannot bypass the shared five-minute floor.
     }
 
     public mutating func inheritLegacyLaunch(_ date: Date) {
@@ -97,7 +93,6 @@ public struct SafariSyncAssist: Codable, Equatable, Sendable {
 
     public mutating func record(result: String) {
         lastResult = result
-        // A denied permission needs a deliberate enable action, not repeated prompts.
         if result == "permissionDenied" { enabled = false }
     }
 

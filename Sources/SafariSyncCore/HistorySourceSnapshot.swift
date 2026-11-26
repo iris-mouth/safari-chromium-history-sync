@@ -44,7 +44,6 @@ public enum HistorySourceReader {
         do {
             return try scanOnce(path: path, browser: browser, viewerOrigins: viewerOrigins, batchSize: batchSize, immutable: false, onStart: onStart, onBatch: onBatch)
         } catch HistorySourceReadError.sqlite(let code, _) where code & 0xff == SQLITE_CANTOPEN && walIsAbsent(path) {
-            // Chromium reconciliation requires a real SQLite read transaction.
             if browser == .chromium { throw HistorySourceReadError.waitingForUnlock }
             // A closed WAL-mode browser can lack -wal/-shm. Immutable mode does
             // not create sidecars, but its results must stay staged until the

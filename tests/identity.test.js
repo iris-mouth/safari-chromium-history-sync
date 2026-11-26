@@ -15,7 +15,7 @@ test("product identifiers and bundle names remain consistent", async () => {
       source("scripts/package-app.sh"),
       source("extension/worker.js"),
       source("Sources/SafariSyncMenu/SetupCoordinator.swift"),
-      source("Sources/SafariSyncMenu/SafariSyncMenuApp.swift"),
+      source("Sources/SafariSyncMenu/MenuDelegate.swift"),
       source("Sources/SafariSyncAgent/main.swift"),
       source("Sources/SafariSyncBridge/main.swift"),
       source("Sources/SafariSyncCore/KeychainRootSecret.swift"),

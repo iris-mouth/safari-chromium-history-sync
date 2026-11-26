@@ -1,4 +1,3 @@
-// Compiled with the actual Menu view/controller sources by scripts/check-menu.sh.
 import AppKit
 import SafariSyncCore
 import ServiceManagement

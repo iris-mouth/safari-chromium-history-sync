@@ -2,7 +2,6 @@ import Darwin
 import Foundation
 import SafariSyncCore
 
-/// Opt-in: run only after confirming the installed Agent is stopped.
 enum AgentProcessTests {
     static func run(agentPath: String) throws {
         let fixture = try HistoryFixture()
@@ -10,8 +9,6 @@ enum AgentProcessTests {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("agent-lifetime-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        // The debug Agent treats its isolated runtime directory as the home
-        // directory for discovery; it must not read real browser profiles.
         let chrome = directory.appendingPathComponent("Library/Application Support/Google/Chrome")
         try FileManager.default.createDirectory(at: chrome.appendingPathComponent("Default"), withIntermediateDirectories: true)
         try Data(#"{"profile":{"info_cache":{"Default":{"name":"Synthetic profile"}}}}"#.utf8)
@@ -148,8 +145,6 @@ enum AgentProcessTests {
                    "empty and wrong-revision reports cannot advance last reception")
         try chromium.exec("DELETE FROM visits WHERE id=42; DELETE FROM urls WHERE id=42")
         _ = try browser("collectRemoval", ["revision": revision, "removedURLs": [liveURL], "removedAt": liveAt + 1])
-        // Already on disk when sync starts, but not yet collected. A future timestamp
-        // alone must never qualify a pre-existing visit for delivery.
         try chromium.exec("INSERT INTO urls VALUES(7,'https://synthetic-before-enable.example/','Older'); INSERT INTO visits VALUES(7,7,14500000000000000)")
         let enabled = try object(command(MenuCommand(operation: "setSyncEnabled", result: "enable")))
         try expect(enabled["enabled"] as? Bool, true, "explicit opt-in after both baselines")
@@ -237,8 +232,6 @@ enum AgentProcessTests {
         try expect(status["enabled"] as? Bool, true, "collection setting survives Agent restart")
         let sources = status["statuses"] as? [[String: Any]] ?? []
         try expect(sources.first(where: { $0["id"] as? String == "safari:default" })?["count"] as? Int ?? 0 >= 2, true, "collection survives Agent restart")
-        // Interrupt a later complete-source scan. Previously committed data must
-        // remain available until the restarted Agent finishes reconciliation.
         try fixture.exec("DELETE FROM history_visits; WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<100000) INSERT INTO history_visits(history_item,visit_time) SELECT 1,100000000+x FROM n")
         _ = try command(MenuCommand(operation: "collectNow"))
         var observedScan = false

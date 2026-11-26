@@ -273,7 +273,6 @@ final class CloudDiagnosticsWindow: NSWindowController, NSTableViewDataSource, N
             let file = try FileHandle(forReadingFrom: url)
             defer { try? file.close() }
             let data = try file.read(upToCount: 32 * 1024 * 1024 + 1) ?? Data()
-            // Extract only owned URLs locally. The complete receiving-device history never crosses IPC.
             var diagnostics = try await self.perform(self.command("cloudStatus"))
             var ownedURLs = Set(diagnostics.deliveries.filter { $0.provider == .safari }.map { $0.url.absoluteString })
             var pages = 1

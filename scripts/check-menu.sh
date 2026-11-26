@@ -13,15 +13,12 @@ swiftc "${SWIFT_OPTIONS[@]}" -parse-as-library -whole-module-optimization \
   "$ROOT"/Sources/HistoryViewCore/*.swift -o "$MENU_CHECK_TMP/HistoryViewCore.o"
 SWIFT_OPTIONS+=(-I "$MENU_CHECK_TMP")
 
-# The actual controllers run against in-memory replies. Do not execute the app's
-# entry point: it launches the installed Agent and can access real user state.
-awk '/^@main$/ { exit } { print }' "$ROOT/Sources/SafariSyncMenu/SafariSyncMenuApp.swift" > "$MENU_CHECK_TMP/MenuDelegate.swift"
 swiftc "${SWIFT_OPTIONS[@]}" -parse-as-library -whole-module-optimization \
   -emit-module -emit-object -module-name SafariSyncCore \
   -emit-module-path "$MENU_CHECK_TMP/SafariSyncCore.swiftmodule" \
   "$ROOT"/Sources/SafariSyncCore/*.swift -o "$MENU_CHECK_TMP/SafariSyncCore.o"
 swiftc "${SWIFT_OPTIONS[@]}" -parse-as-library -I "$MENU_CHECK_TMP" \
-  "$MENU_CHECK_TMP/HistoryViewCore.o" "$MENU_CHECK_TMP/SafariSyncCore.o" "$MENU_CHECK_TMP/MenuDelegate.swift" \
+  "$MENU_CHECK_TMP/HistoryViewCore.o" "$MENU_CHECK_TMP/SafariSyncCore.o" "$ROOT/Sources/SafariSyncMenu/MenuDelegate.swift" \
   "$ROOT/Sources/SafariSyncMenu/SetupCoordinator.swift" \
   "$ROOT/Sources/SafariSyncMenu/CollectionSettings.swift" \
   "$ROOT/Sources/SafariSyncMenu/LoginItemRegistration.swift" \

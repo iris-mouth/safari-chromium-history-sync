@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Synthetic local benchmark; Python is a development-only fixture generator."""
 import argparse
 import json
 from datetime import datetime

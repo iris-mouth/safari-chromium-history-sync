@@ -1,11 +1,9 @@
 import AppKit
 import SafariSyncCore
 
-/// Safari's standard Apple events perform a normal navigation, never an account upload.
 enum SafariSyncAssistDriver {
     static func source(for url: URL) -> String? {
         guard let alternateURL = SafariSyncAssist.alternateControlURL(for: url) else { return nil }
-        // URL validation admits a generated UUID only; never interpolate history URLs.
         return """
         with timeout of 5 seconds
             if application id "com.apple.Safari" is not running then return "notRunning"

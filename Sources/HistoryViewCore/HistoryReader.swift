@@ -153,8 +153,6 @@ public struct HistoryReader: Sendable {
             }
             var pageSQL = whereSQL
             var pageArgs = args
-            // Revalidating explicit IDs above uses direct primary-key lookups.
-            // Only the open-ended page query needs an FTS candidate set.
             if let candidate {
                 pageSQL += " AND v.id IN (SELECT rowid FROM visit_search WHERE visit_search MATCH ?)"
                 pageArgs.append(.text("\"" + candidate.replacingOccurrences(of: "\"", with: "\"\"") + "\""))

@@ -1,5 +1,3 @@
-// The gateway owns TLS and Tailscale owner verification. The sandboxed history reader
-// only receives requests over a private, inherited Unix listener.
 package main
 
 /*
@@ -26,7 +24,6 @@ static int tailscalePeer(int pid) {
     CFRelease(value);
     return status == errSecSuccess;
 }
-// Match both loopback endpoints on a socket held by the signed extension.
 static int ownsForward(int pid, int senderPort, int listenerPort) {
     int bytes = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, NULL, 0);
     if (bytes <= 0) return 0;

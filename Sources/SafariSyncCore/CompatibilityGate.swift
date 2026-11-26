@@ -34,15 +34,11 @@ public struct RuntimeCompatibility: Codable, Equatable, Sendable {
 }
 
 public enum CompatibilityGate {
-    // Historical reference, not a restriction on other OS/Safari versions.
     public static let referenceRuntime = CompatibilityTuple(
         macOSVersion: "27.0.0", macOSBuild: "26A428", safariBuild: "22625.1.29.11.27",
         historyServiceSHA256: "ab218c41abc06292969090580be6a3efa7e212595590df6e1e1328bfdec30b9a"
     )
 
-    // User-confirmed build-601 evidence: docs/validation/macos-27-build-601.md.
-    // This registry changes the evidence label, not runtime eligibility.
-    // Build 601's manual evidence does not qualify the new account-delivery coordinator.
     public static let testedRuntimes: [CompatibilityTuple] = []
 
     public static func assess(
@@ -56,7 +52,6 @@ public enum CompatibilityGate {
               !detected.safariBuild.isEmpty else {
             throw SafariHistoryError.incompatibleSchema("minimum runtime requirements not met")
         }
-        // This label must only be exposed after the live schema/state checks pass.
         return RuntimeCompatibility(
             runtime: detected,
             status: testedRuntimes.contains(detected) ? .tested : .compatibleUnverified

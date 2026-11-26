@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Measure the 30 s scan cadence on a temporary, synthetic browser DB."""
 import argparse
 import importlib.util
 import json

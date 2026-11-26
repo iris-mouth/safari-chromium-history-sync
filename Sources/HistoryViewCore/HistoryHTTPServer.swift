@@ -3,8 +3,6 @@ import Foundation
 
 public enum HistoryHTTPServerError: Error { case listen(Int32) }
 
-/// Loopback-only GET server. Tailscale Serve supplies the required owner header;
-/// the server never serves arbitrary files or provides mutation endpoints.
 public final class HistoryHTTPServer: @unchecked Sendable {
     private let reader: HistoryReader
     private let assets: URL

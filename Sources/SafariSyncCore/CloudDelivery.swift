@@ -162,7 +162,7 @@ public struct CloudDeliveryCoordinator: Codable, Equatable, Sendable {
     public private(set) var plans: [CloudRepairPlan] = []
     private var bindings: [String: String] = [:]
     private var expiredUnverified = 0
-    private var safariLaunches: [Date] = [] // Build 610/611 migration only; never replenished.
+    private var safariLaunches: [Date] = []
     private var safariAssist: SafariSyncAssist?
 
     public init() {}
@@ -300,14 +300,12 @@ public struct CloudDeliveryCoordinator: Codable, Equatable, Sendable {
                 entry.nativeState = "checkpointCovered"
                 entry.nextCheckAt = now.addingTimeInterval(300)
             } else if entry.remoteState == "seen" {
-                // Receiver evidence resolves the obligation without inventing a native ACK.
                 entry.nextCheckAt = now.addingTimeInterval(300)
             } else {
                 pending = true
                 entry.nativeState = now.timeIntervalSince(entry.lastProgressAt ?? entry.queuedAt) >= 900
                     ? "possibleStall" : (isRunning ? "waitingForSafariActivity" : "pending")
                 let delay = delays[min(entry.checks, delays.count - 1)]
-                // Observation cadence must not suppress a separately scheduled action for hours.
                 entry.nextCheckAt = now.addingTimeInterval(!isRunning || safariAssist?.enabled == true
                     ? min(delay, SafariSyncAssist.observationInterval) : delay)
                 entry.checks += 1
@@ -323,7 +321,6 @@ public struct CloudDeliveryCoordinator: Codable, Equatable, Sendable {
         safariAssist?.observe(pending: stillPending, checkpoint: snapshot.checkpoint,
             databaseIdentity: snapshot.databaseIdentity)
         guard pending, !isRunning else { return false }
-        // The caller persists this shared reservation before launching, including failed launches.
         return safariAssist?.reserveLaunch(now: now) == true
     }
 
@@ -439,7 +436,6 @@ public struct CloudDeliveryCoordinator: Codable, Equatable, Sendable {
             && deliveries[index].provider == .safari && isCurrent(deliveries[index]) {
             guard let time = deliveries[index].destinationTime,
                   time.timeIntervalSince1970 <= export.exportedAt else { continue }
-            // Positive, exact URL/latest-time matches only. Absence and older repeated visits stay unknown.
             if let exportedTime = export.visits[deliveries[index].url.absoluteString],
                abs(exportedTime - time.timeIntervalSince1970) < 0.000001 {
                 matches[deliveries[index].url.absoluteString, default: []].append(index)
@@ -482,7 +478,6 @@ public struct CloudDeliveryCoordinator: Codable, Equatable, Sendable {
             $0.queuedAt == $1.queuedAt ? $0.id > $1.id : $0.queuedAt > $1.queuedAt
         }
         let offset = afterID.flatMap { id in records.firstIndex { $0.id == id } }.map { $0 + 1 } ?? 0
-        // Leave room for framing, URL escaping, and account diagnostics within the 1 MiB IPC limit.
         let page = Array(records.dropFirst(offset).prefix(32)).map { entry in
             var visible = entry
             visible.title = nil

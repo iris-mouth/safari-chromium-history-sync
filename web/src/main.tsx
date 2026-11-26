@@ -402,7 +402,6 @@ function App() {
     const onPageHide = () => {
       const saved = save(state.current, false);
       if (!saved) return;
-      // Chromium may already have captured history.state for the reload.
       try {
         sessionStorage.setItem(
           reloadPositionKey,
@@ -446,7 +445,6 @@ function App() {
     const ids = more ? old.map((r) => r.id) : savedIds;
     const firstVisible = firstVisibleRow(old);
     try {
-      // Revalidate in bounded chunks, never trust saved row content.
       let valid: Row[] = [];
       const pageIcons: Record<string, string> = {};
       let offset = 0;
@@ -476,7 +474,6 @@ function App() {
           .find((id) => retained.has(id));
         const anchor =
           anchorId === undefined ? undefined : retained.get(anchorId);
-        // The anchor can disappear after revalidation. Stop after passing its time.
         let oldest = Date.parse(next.at(-1)?.time ?? "");
         const anchorTime = Date.parse(anchor?.time ?? "");
         while (

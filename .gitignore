@@ -1,4 +1,3 @@
-# Local sync state and credentials.
 state.json
 state.sealed
 state.sealed.new
@@ -8,7 +7,6 @@ agent.sock
 *.log
 backups/
 
-# Browser and application databases, including SQLite sidecars.
 History
 History-wal
 History-shm
@@ -33,7 +31,6 @@ Favicons-journal
 !/tests/fixtures/*.sqlite
 !/tests/fixtures/*.sqlite3
 
-# Local Safari backups created before plist writes.
 Bookmarks.plist.bak
 Bookmarks-*.plist
 *.bak
@@ -41,15 +38,12 @@ Bookmarks-*.plist
 *.pre-cleanup
 *.pre-migrate
 
-# Runtime directory if SAFARI_SYNC_STATE_DIR points into the checkout.
 Safari Chromium History Sync/
 
-# Personal one-off migration artifacts.
 migrate-preview.json
 migrate.py
 backfill_dates.py
 
-# Python/cache/editor noise.
 __pycache__/
 *.py[cod]
 .DS_Store
@@ -59,11 +53,9 @@ __pycache__/
 dist/
 .validation-backups/
 
-# Local native messaging manifests if copied into the repo.
 com.local.safari_bookmark_sync.json
 io.github.irismouth.safari_chromium_history_sync.json
 
-# Web build and browser test artifacts.
 /web/node_modules/
 /web/test-results/
 /web/playwright-report/
