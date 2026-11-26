@@ -1,45 +1,43 @@
 # Architecture
 
-## Modules and interfaces
+## Processes and data
 
-The system exposes three behavior-level interfaces:
+The installer puts one menu app in `/Applications`. It owns the login item and
+starts the embedded Agent. When the Viewer is enabled, the menu app also starts
+the gateway, which launches the sandboxed Reader. Quitting the menu app stops
+these services. Register the parent app for Full Disk Access in System Settings.
+[Parent-only access on the validation Mac](validation/extension-632.md).
 
-- `browserExchange(message) -> receipt | page | typedError`
-- `savePair(sourceId, expectedRevision) -> collectionStatus`
-- `status() -> healthSnapshot`
+| Component | Responsibility |
+| --- | --- |
+| Menu | Browser setup, collection and sync settings, local status, recovery, and opening the Viewer. |
+| Chromium extension and Bridge | The extension reads browser visit evidence and stores its queue in `chrome.storage.local`. The Bridge forwards Native Messaging requests to the Agent. |
+| Agent | Scans the two selected sources, writes the viewing database, and routes new visits when sync is enabled. It owns Safari writes, encrypted sync state, and the delivery ledger. |
+| Gateway | Terminates TLS for the configured Tailscale hostname, checks the peer's identity, and forwards approved requests to the Reader over its private Unix socket. |
+| Viewer | Serves the React app and reads the integrated SQLite database through `HistoryReader`. Its sandbox grants read-only access to the viewing directory. |
 
-The extension implementation is in `extension/worker.js`; the FDA implementation is `AgentService`. Both use protocol version 1 and bounded pages of at most 128 events. Tests exercise the extension through these interfaces rather than its internal queue representation.
+Menu and Bridge use separate authenticated roles on the Agent's Unix socket.
+Only the Agent uses the Keychain root secret. [Access boundaries](../SECURITY.md).
 
-The deep modules are:
+## Collection and search
 
-1. **Browser StateCoordinator** — a single-writer promise chain over immutable copy-on-write generations in `chrome.storage.local`.
-2. **Safari history adapter** — structural compatibility validation, arrival cursors, crash reconciliation, and `BEGIN IMMEDIATE` inserts.
-3. **Agent service** — atomic active-profile selection, Safari arrival stream, profile-scoped encrypted outbox, and recovery ledger.
-4. **Local IPC adapter** — Native Messaging framing at the browser boundary and authenticated Unix-socket framing at the FDA boundary.
-5. **Setup coordinator** — browser opt-in, product-owned Native Messaging manifests, login-item state, Agent launch, and focused diagnostics; it runs in the no-FDA Menu process.
+The Agent scans Safari and the selected Chrome or Edge profile. Each record
+retains its source and native visit ID, so two visits to one URL remain distinct.
+An initial scan publishes committed batches. A replacement scan keeps the last
+successful data until reconciliation finishes. After an initial Chromium scan,
+the connected extension can report visits and removals while its browser holds
+the database lock. [Record identity](adr/0010-native-visit-records.md) and
+[browser-owned history](adr/0008-browser-owned-history.md).
 
-## Processes and trust
+The Reader applies the selected date scope and optional normalized title or URL
+terms to pages, saved row IDs, and the scroll anchor. A date range includes both
+endpoints in Asia/Tokyo. Search terms use literal substring matching and must
+all match. The Web app keeps applied filters and the list position in the tab's
+history entries and uses `/` for the displayed address.
 
-```text
-Chrome/Edge extension
-        │ Native Messaging (JSON, ≤1 MiB)
-        ▼
-SafariSyncBridge — no FDA
-        │ role + nonce + HMAC, Unix socket 0600
-        ▼
-Safari Chromium History Sync Agent.app embedded helper — FDA only
-        │ structural schema adapter
-        ▼
-Safari History.db ── Safari CloudHistory ── iPhone Safari
-
-SafariSyncMenu — no FDA ── authenticated menu role ──┘
-```
-
-The Menu app is the registered login item. On launch it opens the embedded Agent by its bundle URL. Full Disk Access belongs to that helper.
-
-The Bridge cannot open Safari's database directly, but it relays bounded Safari history pages to the selected Extension. The Menu cannot use browser transport. The Agent accepts only `bridge` and `menu` roles with valid HMACs and rejects replayed nonces. The HMAC key is stored in an owner-only mode-`0600` file so separately signed local-development executables do not trigger Keychain authorization prompts. This authenticates messages against accidental or cross-user callers, not against arbitrary code already executing as the current user, which can read the key. Only the Agent reads the Keychain root secret used for the AES-GCM sealed state document. Delivery idempotency is kept in a separate Agent-owned SQLite ledger rather than adding tables to Safari's database.
-
-The threat boundary assumes the current macOS account is not already compromised. The system does defend the FDA boundary, validates untrusted browser input, separates profiles, and fails closed before unknown Safari layouts are written. It deliberately does not add XPC identity infrastructure or privileged installer helpers. The Extension's fixed manifest key stabilizes the unpacked extension ID for `allowed_origins`; it is identification, not code-signing or a trust guarantee.
+The [design decisions](adr/), [domain terms](../CONTEXT.md), and
+[original integration interview](https://github.com/iris-mouth/safari-chromium-history-sync/blob/edc47977dd12d07ab678ce91afccd80662fda975/docs/INTEGRATION-DESIGN.md)
+record the reasoning behind collection and viewing.
 
 ## Streams
 
@@ -50,7 +48,7 @@ Each direction is a durable monotonic stream with random source event IDs:
 
 Pages and receipts are bounded and cumulative. The active browser applies at most one Safari event at a time, preventing a later evidence result from cumulatively acknowledging an earlier unresolved event.
 
-No historical backfill occurs. The first Safari scan establishes an authenticated maximum-visit baseline. Browser history is observed only after `onVisited`. A DB identity change, missing anchor, or row-HMAC mismatch fails closed.
+Enabling sync records each source's maximum native visit ID. Existing visits stay available for viewing. Only new eligible visits enter the delivery streams. A Safari database identity change, missing anchor, or row authenticator mismatch blocks sync.
 
 ## Browser delivery evidence
 
@@ -112,9 +110,15 @@ Collected visits and pending delivery candidates commit together. Changing the s
 
 ## Setup and distribution
 
-The normal menu opens a read-only sync-status window and separate settings for browser selection, Safari automatic assistance, and extension/login setup. Reopening the app opens status. Compatibility, blocked recovery and detailed diagnostics are grouped under troubleshooting. Probe creation, receiver evidence, export comparison, replay and account rebind are collapsed under explicit advanced diagnostics; opening the menu or a status window cannot create a probe. Probe/replay dialogs describe the destination and new history entry before execution.
+The menu shows collection, browser sync, and Viewer availability separately.
+Opening it reads status. Recovery actions take the user to the relevant
+settings or operation. Probe creation, receiver evidence, export comparison,
+replay, and account rebind stay under advanced diagnostics in Browser Sync
+settings. Probe and replay dialogs identify the destination and new history entry.
 
-The Menu app owns setup because it does not have Full Disk Access. The user explicitly selects Chrome Stable, Edge Stable, or both. The coordinator creates or repairs a Native Messaging manifest only for selected browsers and removes only product-owned matching manifests when a browser is deselected. It never creates a Native Messaging directory for an unselected browser.
+The user selects Chrome Stable, Edge Stable, or both in General settings. Setup
+writes Native Messaging manifests only for the selected browsers. If a browser
+is deselected, it removes only a matching product-owned manifest.
 
 The Agent recognizes separate blocked issue codes for an unsupported runtime, Safari database identity change, invalid Safari arrival anchor, unavailable Safari access, unavailable Keychain access, and unreadable sealed state. Only authenticated `menu` requests can invoke recovery, and only while the matching issue is blocked:
 
@@ -123,7 +127,7 @@ The Agent recognizes separate blocked issue codes for an unsupported runtime, Sa
 
 There is no generic repair command.
 
-The Extension is bundled as an unpacked-development artifact inside the Menu app. Setup opens the selected browser's extensions page and reveals that folder; browser approval and macOS privacy approval remain user actions. The unsigned local PKG installs one ad-hoc-signed Menu app in `/Applications`, with the Agent, Viewer and gateway inside Contents/Helpers. Its installer scripts verify the replacement before removing a product-owned sibling Agent from an earlier build. User-specific manifests and login-item state are created on first launch, never by privileged installer scripts. Store distribution, Developer ID signing, and notarization are not implemented.
+The app bundles the unpacked extension. Setup opens the selected browser's extensions page and reveals the extension folder. The PKG upgrade scripts verify the replacement before removing a product-owned sibling Agent from an older installation. Native Messaging and login registration run in the user's session.
 
 ## Migration and rollback
 

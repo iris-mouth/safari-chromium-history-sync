@@ -483,9 +483,9 @@ public final class AgentService: @unchecked Sendable {
 
     public func status() throws -> HealthSnapshot {
         lock.withLock {
-            let state: State
+            let savedState: State?
             do {
-                state = try persistence.load() ?? State()
+                savedState = try persistence.load()
             } catch {
                 return HealthSnapshot(
                     enabled: false,
@@ -501,8 +501,10 @@ public final class AgentService: @unchecked Sendable {
                     unrecoverableCount: persistence.lastKnownUnresolvedCount()
                 )
             }
+            let state = savedState ?? State()
             return HealthSnapshot(
                 enabled: state.enabled && (collector == nil || (try? collector?.pair()?.since) != nil),
+                syncRequested: savedState?.enabled,
                 activeProfileID: state.activeProfileID,
                 runtimeState: "ready",
                 agentBuild: agentBuild,

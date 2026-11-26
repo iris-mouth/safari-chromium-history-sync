@@ -69,11 +69,24 @@ private final class AgentRuntime: @unchecked Sendable {
             agentBuild: agentBuild,
             compatibility: compatibility, collector: collector
         )
+        let pair: HistoryCollector.Pair?
         do {
-            if let pair = try collector?.pair() { try readyService.reconcilePair(revision: pair.revision, onStartup: true) }
-        } catch { block(AgentIssueCode.stateUnreadable); return }
-        if (try? collector?.pair()?.since) == nil {
-            do { try readyService.setSyncEnabled(false) } catch { block(AgentIssueCode.stateUnreadable); return }
+            guard let collector else { throw TypedError(code: AgentIssueCode.collectionUnavailable) }
+            pair = try collector.pair()
+        } catch {
+            lock.withLock {
+                service = readyService
+                runtimeState = "blocked"
+                issueCode = AgentIssueCode.collectionUnavailable
+            }
+            return
+        }
+        do {
+            if let pair { try readyService.reconcilePair(revision: pair.revision, onStartup: true) }
+            if pair?.since == nil { try readyService.setSyncEnabled(false) }
+        } catch {
+            block(AgentIssueCode.stateUnreadable)
+            return
         }
         // Keep the encrypted sync preference adjustable even if Safari access
         // is currently blocked; browser exchange still requires ready state.
@@ -123,9 +136,7 @@ private final class AgentRuntime: @unchecked Sendable {
             }
             lock.withLock { collector = instance; collectionTimer = timer }
             timer.resume()
-        } catch {
-            // Sync remains independent; collection commands report unavailable.
-        }
+        } catch { return }
     }
 
     func collectionCommand(_ command: MenuCommand) throws -> Data {
@@ -164,8 +175,20 @@ private final class AgentRuntime: @unchecked Sendable {
         default: throw TypedError(code: "INVALID_OPERATION")
         }
         let current = try collector.pair()
-        let outdated = outdatedExtensionFamily != nil && current?.extensionID == nil && current?.source.split(separator: ":").first.map(String.init) == outdatedExtensionFamily
+        let outdated = needsExtensionUpdate(current)
         return try JSONEncoder().encode(CollectionReply(extensionUpdateRequired: outdated, enabled: collector.isEnabled(), sources: collector.sources(), pair: collector.pair(), pendingCount: collector.candidateCount(queued: lock.withLock { self.service }?.pendingPairEvents() ?? []), statuses: collector.statuses()))
+    }
+
+    private func needsExtensionUpdate(_ pair: HistoryCollector.Pair?) -> Bool {
+        guard let pair, pair.extensionID == nil, let outdatedExtensionFamily else { return false }
+        return pair.source.split(separator: ":").first == Substring(outdatedExtensionFamily)
+    }
+
+    func menuStatus() -> MenuStatusSnapshot {
+        let collector = lock.withLock { self.collector }
+        let collection = try? collector?.overview()
+        return .init(collection: collection, sync: try? health(),
+                     extensionUpdateRequired: needsExtensionUpdate(collection?.pair))
     }
 
     private func discover(_ collector: HistoryCollector) throws -> CollectionCandidates {
@@ -224,7 +247,7 @@ private final class AgentRuntime: @unchecked Sendable {
             } catch let error as SafariHistoryError {
                 if error.isTransientContention { return try service.status() }
                 block(issue(for: error))
-                return blockedHealth(issue: issue(for: error))
+                return blockedHealth(issue: issue(for: error), service: service)
             }
         }
         return HealthSnapshot(
@@ -372,6 +395,7 @@ private final class AgentRuntime: @unchecked Sendable {
         let status = try? service?.status()
         return HealthSnapshot(
             enabled: false,
+            syncRequested: status?.syncRequested,
             activeProfileID: status?.activeProfileID,
             runtimeState: "blocked",
             issueCode: issue,
@@ -522,6 +546,8 @@ do {
                         let command = try JSONDecoder().decode(MenuCommand.self, from: request.body)
                         if command.operation == "status" {
                             response = try JSONEncoder().encode(runtime.health())
+                        } else if command.operation == "menuStatus" {
+                            response = try JSONEncoder().encode(runtime.menuStatus())
                         } else if command.operation == "inspectSafariCursor" {
                             response = try JSONEncoder().encode(runtime.inspectSafariCursor())
                         } else if ["collectionStatus", "collectionCandidates", "savePair", "connectPair", "collectNow", "setViewerOrigin"].contains(command.operation) {

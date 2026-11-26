@@ -78,6 +78,32 @@ input {
   font-size: 16px;
   margin-top: 3px;
 }
+.search-scope {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  min-width: 0;
+  margin: 0 0 6px;
+  padding: 0;
+  border: 0;
+}
+.search-scope legend {
+  padding: 0;
+  font-size: 11px;
+  color: #4a6073;
+}
+.search-scope label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  font-size: 0.875rem;
+}
+.search-scope input {
+  width: auto;
+  margin: 0;
+  accent-color: #175c78;
+}
 .date-fields {
   display: flex;
   align-items: end;
@@ -130,6 +156,11 @@ nav button {
   margin: 0;
   flex: 1;
   overflow-wrap: anywhere;
+}
+.result-scope {
+  display: block;
+  font-weight: 400;
+  color: #4a6073;
 }
 .list-heading button {
   font-size: 11px;
@@ -378,6 +409,11 @@ a {
 .record time {
   font-size: 0.78rem;
 }
+.date-fields.all-time {
+  display: flex;
+  justify-content: flex-end;
+}
+
 @media (min-width: 720px) {
   .record-text {
     display: grid;

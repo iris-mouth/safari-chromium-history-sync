@@ -104,6 +104,50 @@ enum AgentProcessTests {
             usleep(100_000)
         }
         guard complete else { throw IntegrationFailure.assertion("isolated pair did not finish collection") }
+        func menuStatus() throws -> MenuStatusSnapshot {
+            try JSONDecoder().decode(MenuStatusSnapshot.self, from: command(MenuCommand(operation: "menuStatus")))
+        }
+        func waitForSyncStatus() throws -> MenuStatusSnapshot {
+            for _ in 0..<100 {
+                if let snapshot = try? menuStatus(), let status = snapshot.sync, status.runtimeState != "initializing" {
+                    return snapshot
+                }
+                usleep(100_000)
+            }
+            throw IntegrationFailure.assertion("isolated Agent did not report initialized sync status")
+        }
+        let before = try menuStatus()
+        try expect(before.collection?.enabled, true, "menu reports collection independently of sync")
+        try expect(before.sync?.syncRequested, false, "menu reports saved sync off")
+        try expect(before.collection?.sources.first { $0.browser == .chromium }?.lastLiveVisit == nil, true,
+                   "a native scan does not prove live extension ingestion")
+        let liveAt = Date().timeIntervalSince1970 * 1000
+        let liveURL = "https://synthetic-live-while-sync-off.example/"
+        let nativeTime = Int64((liveAt * 1000).rounded()) + 11_644_473_600_000_000
+        try chromium.exec("INSERT INTO urls VALUES(42,'\(liveURL)','Native first'); INSERT INTO visits VALUES(42,42,\(nativeTime))")
+        _ = try command(MenuCommand(operation: "collectNow"))
+        var nativeCollected = false
+        for _ in 0..<100 {
+            let rows = try object(command(MenuCommand(operation: "collectionStatus")))["statuses"] as? [[String: Any]]
+            if rows?.first(where: { $0["id"] as? String == "chrome:Default" })?["count"] as? Int == 1 {
+                nativeCollected = true
+                break
+            }
+            usleep(100_000)
+        }
+        try expect(nativeCollected, true, "fixture reaches viewing DB through the native scan first")
+        let live: [String: Any] = ["revision": revision, "visits": [["visitId": "42", "visitTime": liveAt, "url": liveURL]]]
+        _ = try browser("collectVisits", live)
+        let after = try menuStatus()
+        let receipt = after.collection?.sources.first { $0.browser == .chromium }?.lastLiveVisit
+        try expect(receipt != nil, true, "valid report for an already collected visit proves the extension is reporting")
+        try expect(after.sync?.syncRequested, false, "live extension collection leaves sync off")
+        _ = try browser("collectVisits", ["revision": revision, "visits": []])
+        _ = try browser("collectVisits", ["revision": "old", "visits": live["visits"]!])
+        try expect(try menuStatus().collection?.sources.first { $0.browser == .chromium }?.lastLiveVisit, receipt,
+                   "empty and wrong-revision reports cannot advance last reception")
+        try chromium.exec("DELETE FROM visits WHERE id=42; DELETE FROM urls WHERE id=42")
+        _ = try browser("collectRemoval", ["revision": revision, "removedURLs": [liveURL], "removedAt": liveAt + 1])
         // Already on disk when sync starts, but not yet collected. A future timestamp
         // alone must never qualify a pre-existing visit for delivery.
         try chromium.exec("INSERT INTO urls VALUES(7,'https://synthetic-before-enable.example/','Older'); INSERT INTO visits VALUES(7,7,14500000000000000)")
@@ -157,8 +201,37 @@ enum AgentProcessTests {
         try expect(blockedInspection.identityMatches, false, "blocked Agent reports replaced identity")
         try expect(blockedInspection.anchorState, "matches", "Agent preserves the old anchor")
         try stop(process)
+
+        let sealedStateURL = directory.appendingPathComponent("state.sealed")
+        let stateBeforeUnavailable = try Data(contentsOf: sealedStateURL)
+        let viewingDirectory = directory.appendingPathComponent("Viewing")
+        let backupDirectory = directory.appendingPathComponent("Viewing.backup")
+        try FileManager.default.moveItem(at: viewingDirectory, to: backupDirectory)
+        try Data().write(to: viewingDirectory)
+        process = try start()
+        let unavailable = try waitForSyncStatus()
+        try expect(unavailable.collection == nil, true, "menu cannot describe an unavailable collection DB")
+        try expect(unavailable.sync?.issueCode, AgentIssueCode.collectionUnavailable, "collection failure blocks delivery")
+        try expect(unavailable.sync?.enabled, false, "sync cannot route while collection data is unavailable")
+        try expect(unavailable.sync?.syncRequested, true, "collection failure leaves the saved sync intent on")
+        try expect(try Data(contentsOf: sealedStateURL), stateBeforeUnavailable, "startup does not rewrite the saved sync state")
+        try expect(try object(browser("pull", fields))["code"] as? String, "COLLECTION_UNAVAILABLE", "unavailable collection cannot dispatch browser delivery")
+        try stop(process)
+
+        let sealedBackupURL = directory.appendingPathComponent("state.backup")
+        try FileManager.default.moveItem(at: sealedStateURL, to: sealedBackupURL)
+        process = try start()
+        try expect(try waitForSyncStatus().sync?.syncRequested == nil, true, "missing collection and sealed state leave intent unknown")
+        try expect(FileManager.default.fileExists(atPath: sealedStateURL.path), false, "failed startup does not create a preference")
+        try stop(process)
+        try FileManager.default.moveItem(at: sealedBackupURL, to: sealedStateURL)
+
+        try FileManager.default.removeItem(at: viewingDirectory)
+        try FileManager.default.moveItem(at: backupDirectory, to: viewingDirectory)
+
         process = try start()
         try waitForCollection()
+        try expect(try waitForSyncStatus().sync?.syncRequested, true, "restoring collection retains the saved sync intent")
         let data = try command(MenuCommand(operation: "collectionStatus"))
         let status = try JSONSerialization.jsonObject(with: data) as! [String: Any]
         try expect(status["enabled"] as? Bool, true, "collection setting survives Agent restart")
@@ -220,6 +293,7 @@ enum AgentProcessTests {
         try waitForCollection()
         let preferenceData = try command(MenuCommand(operation: "syncPreference"))
         try expect(try JSONDecoder().decode(SyncPreferenceStatus.self, from: preferenceData).enabled, false, "blocked sync preference persists")
+        try expect(try menuStatus().sync?.syncRequested, false, "menu reads persisted sync off after restart")
         try FileManager.default.createDirectory(at: chrome.appendingPathComponent("Profile 1"), withIntermediateDirectories: true)
         let outdated = try object(command(MenuCommand(operation: "savePair", profileID: "chrome:Profile 1", result: "disable", snapshotJSON: revision)))
         try expect(outdated["code"] as? String, "PAIR_CHANGED", "generation replacement invalidates stale settings")
@@ -227,6 +301,8 @@ enum AgentProcessTests {
         let switched = try object(command(MenuCommand(operation: "savePair", profileID: "chrome:Profile 1", result: "disable", snapshotJSON: current?["revision"] as? String, expectedRemoved: 2, expectedPending: 0)))
         let switchedRows = switched["statuses"] as? [[String:Any]]
         try expect(switchedRows?.contains { $0["id"] as? String == "chrome:Default" }, false, "previous profile removed from viewing DB")
+        try expect(try menuStatus().collection?.sources.contains { $0.lastLiveVisit != nil }, false,
+                   "previous profile evidence never carries into a different pair")
         try expect(switchedRows?.first(where: { $0["id"] as? String == "safari:default" })?["count"] as? Int, 100000, "switch preserves Safari rows")
         try expect(try object(browser("pull", fields))["code"] as? String, "PAIR_NOT_CONNECTED", "old extension cannot fetch retained or new deliveries")
         try expect(try chromium.scalarInt("SELECT count(*) FROM visits"), 2, "switch preserves native Chromium history")

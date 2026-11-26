@@ -112,6 +112,7 @@ public struct TypedError: Codable, Error, Equatable, Sendable, LocalizedError {
 public struct HealthSnapshot: Codable, Equatable, Sendable {
     public let protocolVersion: Int
     public let enabled: Bool
+    public let syncRequested: Bool?
     public let activeProfileID: String?
     public let runtimeState: String
     public let issueCode: String?
@@ -125,7 +126,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
     public let cloud: CloudSummary?
 
     enum CodingKeys: String, CodingKey {
-        case protocolVersion, enabled, runtimeState, issueCode, agentBuild, connectedProfiles, compatibility
+        case protocolVersion, enabled, syncRequested, runtimeState, issueCode, agentBuild, connectedProfiles, compatibility
         case activeProfileID = "activeProfileId"
         case pendingBrowserToSafari, pendingSafariToBrowser
         case recoveryCount, unrecoverableCount, cloud
@@ -134,6 +135,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
     public init(
         protocolVersion: Int = safariSyncProtocolVersion,
         enabled: Bool,
+        syncRequested: Bool? = nil,
         activeProfileID: String?,
         runtimeState: String,
         issueCode: String? = nil,
@@ -148,6 +150,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
     ) {
         self.protocolVersion = protocolVersion
         self.enabled = enabled
+        self.syncRequested = syncRequested
         self.activeProfileID = activeProfileID
         self.runtimeState = runtimeState
         self.issueCode = issueCode
@@ -159,6 +162,18 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         self.recoveryCount = recoveryCount
         self.unrecoverableCount = unrecoverableCount
         self.cloud = cloud
+    }
+}
+
+public struct MenuStatusSnapshot: Codable, Sendable {
+    public let collection: CollectionOverview?
+    public let sync: HealthSnapshot?
+    public let extensionUpdateRequired: Bool
+
+    public init(collection: CollectionOverview?, sync: HealthSnapshot?, extensionUpdateRequired: Bool) {
+        self.collection = collection
+        self.sync = sync
+        self.extensionUpdateRequired = extensionUpdateRequired
     }
 }
 

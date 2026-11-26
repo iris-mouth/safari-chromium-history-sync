@@ -21,6 +21,7 @@ public enum AgentIssueCode {
     public static let safariAccessUnavailable = "safariAccessUnavailable"
     public static let keychainUnavailable = "keychainUnavailable"
     public static let stateUnreadable = "stateUnreadable"
+    public static let collectionUnavailable = "collectionUnavailable"
 
     public static func forHistoryError(_ error: SafariHistoryError) -> String {
         switch error {

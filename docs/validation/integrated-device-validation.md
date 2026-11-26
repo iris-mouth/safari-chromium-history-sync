@@ -1,5 +1,8 @@
 # Integrated viewer validation
 
+This record covers the early integrated builds. Later gateway, permission, and
+iPhone checks are listed in the [validation index](../INTEGRATION-IMPLEMENTATION-STATUS.md).
+
 The initial synthetic measurements are local baselines, not the device acceptance
 result. `integrated-local-benchmark.json` records a separate Collector process,
 Viewer process and loopback HTTP, using warm filesystem caches. It does not

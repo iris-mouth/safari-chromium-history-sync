@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 
 test.use({ timezoneId: "America/Los_Angeles" });
 const fixturePath = join(process.env.HISTORY_WEB_TEST_DIR!, "history.sqlite");
@@ -17,10 +17,12 @@ function deferred() {
   });
   return { promise, resolve };
 }
-async function showDay(page, start: string, end = start) {
+async function showDay(page: Page, start: string, end = start) {
+  await page.getByRole("radio", { name: "期間指定" }).check();
   await page.getByLabel("開始日").fill(start);
   await page.getByLabel("終了日").fill(end);
-  await page.getByRole("button", { name: "表示", exact: true }).click();
+  await page.getByRole("searchbox").fill("");
+  await page.getByRole("button", { name: "検索", exact: true }).click();
 }
 
 test("200件の密な一覧・ローカルアイコン・件数選択・日付移動", async ({
@@ -32,6 +34,7 @@ test("200件の密な一覧・ローカルアイコン・件数選択・日付�
   });
   await page.goto("/");
   await expect(page.locator(".records li")).toHaveCount(200);
+  await expect(page).toHaveURL("/");
   await expect(
     page.getByRole("heading", { name: "2026-11-10", exact: true }),
   ).toBeVisible();
@@ -91,17 +94,22 @@ test("200件の密な一覧・ローカルアイコン・件数選択・日付�
 
 test("正規化検索・日付表示との往復・位置復元・再読み込み", async ({ page }) => {
   await page.goto("/");
+  await page.getByRole("radio", { name: "全期間" }).check();
   const search = page.getByRole("searchbox");
   await search.fill("abc がっこう 1 kg");
+  await search.press("Enter");
   await expect(page.locator(".records li")).toHaveCount(1);
   await expect(page.locator(".records")).toContainText("ＡＢＣ ｶﾞｯｺｳ ① ㎏");
   await search.fill("かたかな");
+  await search.press("Enter");
   await expect(page.locator(".records li")).toHaveCount(200);
   await expect(
     page.getByRole("button", { name: "この日の前後を見る" }),
   ).toHaveCount(0);
   await page.getByRole("button", { name: "さらに読み込む" }).click();
   await expect(page.locator(".records li")).toHaveCount(400);
+  await page.getByRole("radio", { name: "期間指定" }).check();
+  await search.fill("");
   await page.locator(".records li").nth(300).scrollIntoViewIfNeeded();
   const focus = await page
     .locator(".records li")
@@ -114,7 +122,9 @@ test("正規化検索・日付表示との往復・位置復元・再読み込�
     .evaluate((form: HTMLFormElement) => form.requestSubmit());
   await expect(search).toHaveValue("");
   await expect(page.locator(".records li")).toHaveCount(200);
+  await expect(page).toHaveURL("/");
   await page.goBack();
+  await expect(page.getByRole("radio", { name: "全期間" })).toBeChecked();
   await expect(search).toHaveValue("かたかな");
   await expect(page.locator(".records li")).toHaveCount(400);
   await expect
@@ -129,18 +139,39 @@ test("正規化検索・日付表示との往復・位置復元・再読み込�
   await page.goForward();
   await expect(search).toHaveValue("");
   await expect(page.locator(".records li")).toHaveCount(200);
+  await page.goBack();
+  await expect(page.locator(".records li")).toHaveCount(400);
+  mutate(`
+    INSERT INTO visits(id,source_id,generation,native_id,url,title,visit_seconds,visit_fraction,norm_title,norm_url)
+    SELECT 1201,source_id,generation,1201,'https://example.test/new','カタカナ 新着',visit_seconds+60,0,'かたかな 新着','https://example.test/new'
+    FROM visits WHERE id=1;
+    INSERT INTO visits(id,source_id,generation,native_id,url,title,visit_seconds,visit_fraction,norm_title,norm_url)
+    SELECT 1202,source_id,generation,1202,'https://example.test/late','カタカナ 遅着',visit_seconds,0.5,'かたかな 遅着','https://example.test/late'
+    FROM visits WHERE id=250;
+  `);
+  const reloadFocus = await page.locator(".records li").evaluateAll(es => {
+    es[275].scrollIntoView();
+    return es.find(e => e.getBoundingClientRect().bottom > 0)?.id;
+  });
   await page.reload();
-  await expect(page.locator(".records li").first()).toHaveAttribute(
-    "id",
-    "row-1",
-  );
+  await expect(page).toHaveURL("/");
+  await expect(search).toHaveValue("かたかな");
+  await expect(page.locator(".records li")).toHaveCount(400);
+  await expect(page.locator(".records li").first()).toHaveAttribute("id", "row-1201");
+  await expect(page.locator("#row-1202")).toBeVisible();
+  await expect.poll(() => page.locator(".records li").evaluateAll(es =>
+    es.find(e => e.getBoundingClientRect().bottom > 0)?.id)).toBe(reloadFocus);
 });
 
 test("描画前にフレームが進んでも戻る位置を復元する", async ({ page }) => {
   await page.goto("/?start=2026-11-10&end=2026-11-10&q=かたかな");
   await expect(page.locator(".records li")).toHaveCount(200);
+  await expect(page).toHaveURL("/");
+  await expect(page.getByRole("radio", { name: "全期間" })).toBeChecked();
   await page.getByRole("button", { name: "さらに読み込む" }).click();
   await expect(page.locator(".records li")).toHaveCount(400);
+  await page.getByRole("radio", { name: "期間指定" }).check();
+  await page.getByRole("searchbox").fill("");
   await page.locator(".records li").nth(300).scrollIntoViewIfNeeded();
   const focus = await page
     .locator(".records li")
@@ -183,9 +214,12 @@ test("IME・古い検索応答・検索クリア", async ({ page }) => {
   });
   await search.dispatchEvent("compositionstart");
   await search.fill("がっこう");
+  await search.press("Enter");
   await page.waitForTimeout(400);
   expect(queries).not.toContain("がっこう");
   await search.dispatchEvent("compositionend");
+  expect(queries).not.toContain("がっこう");
+  await search.press("Enter");
   await expect(page.locator(".records li")).toHaveCount(1);
   const received = deferred(),
     gate = deferred(),
@@ -207,6 +241,7 @@ test("IME・古い検索応答・検索クリア", async ({ page }) => {
   });
   try {
     await search.fill("slow");
+    await search.press("Enter");
     await received.promise;
     await search.fill("がっこう");
     await search.press("Enter");
@@ -216,7 +251,9 @@ test("IME・古い検索応答・検索クリア", async ({ page }) => {
     await page.waitForLoadState("networkidle");
     await expect(page.locator(".records")).toContainText("ＡＢＣ");
     await search.fill(" ");
-    await expect(page).not.toHaveURL(/[?&]q=/);
+    await expect(page.locator(".records li")).toHaveCount(1);
+    await search.press("Enter");
+    await expect(page).toHaveURL("/");
     await expect(page.locator(".records li")).toHaveCount(200);
   } finally {
     gate.resolve();
@@ -226,6 +263,7 @@ test("IME・古い検索応答・検索クリア", async ({ page }) => {
 test("保存文字列を実行せずDB・設定を配信しない", async ({ page, request }) => {
   await page.goto("/");
   await page.getByRole("searchbox").fill("script");
+  await page.getByRole("searchbox").press("Enter");
   await expect(page.locator(".records li")).toHaveCount(1);
   await expect(page.locator(".records")).toContainText("</script>");
   await page.locator(".record").first().click();
@@ -257,6 +295,7 @@ test("追加取得と戻るで条件不一致・削除を再確認する", async
   await page.goto("/");
   const search = page.getByRole("searchbox");
   await search.fill("かたかな");
+  await search.press("Enter");
   await expect(page.locator(".records li")).toHaveCount(200);
   mutate(
     "DELETE FROM visits WHERE id=1; UPDATE visits SET title='別の内容',norm_title='別の内容' WHERE id=2;",
@@ -275,30 +314,65 @@ test("追加取得と戻るで条件不一致・削除を再確認する", async
   await expect(page.locator("#row-100")).toHaveCount(0);
 });
 
-for (const start of ["2026-11-08", "2026-11-07"]) {
-  test(`${start}の検索前の日付・期間は履歴ごとに復元する`, async ({ page }) => {
-    await page.goto(`/?start=${start}&end=2026-11-08`);
-    await expect(page.getByText("該当する履歴がありません")).toBeVisible();
-    const search = page.getByRole("searchbox");
-    await search.fill("かたかな");
-    await expect(page.locator(".records li")).toHaveCount(200);
-    await showDay(page, "2026-11-10");
-    await expect(search).toHaveValue("");
-    await expect(page.locator(".records li")).toHaveCount(200);
-    await search.fill("abc");
-    await expect(page.locator(".records li")).toHaveCount(1);
-    await page.goBack();
-    await expect(search).toHaveValue("");
-    await expect(page.locator(".records li")).toHaveCount(200);
-    await page.goBack();
-    await expect(search).toHaveValue("かたかな");
-    await expect(page.locator(".records li")).toHaveCount(200);
-    await search.fill(" ");
-    await expect(page).not.toHaveURL(/[?&]q=/);
-    await expect(page.getByLabel("開始日")).toHaveValue(start);
-    await expect(page.getByLabel("終了日")).toHaveValue("2026-11-08");
+test("範囲指定とキーワードは独立し実行時にだけ適用される", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator(".records li")).toHaveCount(200);
+  const search = page.getByRole("searchbox");
+  const run = page.getByRole("button", { name: "検索", exact: true });
+  const requests: string[] = [];
+  page.on("request", (r) => {
+    if (r.url().includes("/api/records?")) requests.push(r.url());
   });
-}
+
+  await search.fill("かたかな 1200");
+  await page.waitForTimeout(350);
+  expect(requests).toHaveLength(0);
+  await expect(page.locator(".records li")).toHaveCount(200);
+  await run.click();
+  await expect(page.getByText("該当する履歴がありません")).toBeVisible();
+
+  await page.getByRole("radio", { name: "全期間" }).check();
+  await expect(page.getByLabel("開始日")).toHaveCount(0);
+  await expect(search).toHaveValue("かたかな 1200");
+  await expect(page.getByText("該当する履歴がありません")).toBeVisible();
+  await run.click();
+  await expect(page.locator(".records li")).toHaveCount(1);
+  await expect(page.locator("#row-1200")).toBeVisible();
+
+  await search.fill(" ");
+  await run.click();
+  await expect(page.locator(".records li")).toHaveCount(200);
+  await expect(page.getByRole("heading", { name: "全期間", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "前日" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "翌日" })).toBeDisabled();
+  await expect(page).toHaveURL("/");
+  expect(requests.map(url => new URL(url).searchParams.get("scope"))).toEqual(["range", "all", "all"]);
+  expect(new URL(requests[2]).searchParams.has("q")).toBe(false);
+
+  await page.goBack();
+  await expect(search).toHaveValue("かたかな 1200");
+  await expect(page.locator("#row-1200")).toBeVisible();
+  await page.goBack();
+  await expect(page.getByRole("radio", { name: "期間指定" })).toBeChecked();
+  await expect(page.getByLabel("開始日")).toHaveValue("2026-11-10");
+  await expect(page.getByText("該当する履歴がありません")).toBeVisible();
+});
+
+test("旧日付リンクを読み込み不正な期間は適用しない", async ({ page }) => {
+  await page.goto("/?start=2026-11-07&end=2026-11-08");
+  await expect(page).toHaveURL("/");
+  await expect(page.getByRole("radio", { name: "期間指定" })).toBeChecked();
+  await expect(page.getByLabel("開始日")).toHaveValue("2026-11-07");
+  await expect(page.getByLabel("終了日")).toHaveValue("2026-11-08");
+  await expect(page.getByText("該当する履歴がありません")).toBeVisible();
+  await expect(page.getByRole("button", { name: "前日" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "翌日" })).toBeDisabled();
+  await page.getByLabel("開始日").fill("2026-11-09");
+  await page.getByRole("button", { name: "検索", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "2026-11-07 – 2026-11-08" })).toBeVisible();
+  await page.reload();
+  await expect(page.getByLabel("開始日")).toHaveValue("2026-11-07");
+});
 
 for (const status of [200, 404]) {
   test(`詳細の遅い${status}応答は最後の選択を上書きしない`, async ({
@@ -419,6 +493,7 @@ test("changing language preserves the current view and restores focus after deta
   await page.getByLabel("表示言語").selectOption("en");
   await expect(page.locator("html")).toHaveAttribute("lang", "en");
   await expect(page.getByLabel("Start date")).toBeVisible();
+  await expect(page.getByRole("radio", { name: "Date range" })).toBeChecked();
   expect(page.url()).toBe(location);
   const first = page.locator(".record").first();
   await first.focus();
@@ -430,13 +505,16 @@ test("changing language preserves the current view and restores focus after deta
   await expect(page.getByLabel("Language")).toHaveValue("en");
 });
 
-test("狭い画面でも日付と表示が横一列に収まり選択した日付が見える", async ({ page }) => {
+test("狭い画面でも日付と検索が横一列に収まり選択した日付が見える", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/");
-  const start = page.getByLabel("開始日");
-  const end = page.getByLabel("終了日");
-  const submit = page.getByRole("button", { name: "表示", exact: true });
-  for (const [width, font] of [[390, 16], [320, 16], [390, 22]] as const) {
+  await showDay(page, "2026-11-10");
+  await expect(page.locator(".compact-date").first()).toHaveText("2026/11/10");
+  for (const [width, font, lang] of [[390, 16, "ja"], [320, 16, "ja"], [390, 22, "ja"], [320, 16, "en"]] as const) {
+    if (lang === "en") await page.getByLabel("表示言語").selectOption("en");
+    const start = page.getByLabel(lang === "ja" ? "開始日" : "Start date");
+    const end = page.getByLabel(lang === "ja" ? "終了日" : "End date");
+    const submit = page.getByRole("button", { name: lang === "ja" ? "検索" : "Search", exact: true });
     await page.setViewportSize({ width, height: 844 });
     await page.evaluate(size => { document.documentElement.style.fontSize = size + "px"; }, font);
     const a = (await start.boundingBox())!;
@@ -452,6 +530,4 @@ test("狭い画面でも日付と表示が横一列に収まり選択した日�
     expect(clipped).toBe(false);
     expect(button.x + button.width).toBeLessThanOrEqual(width);
   }
-  await showDay(page, "2026-11-10");
-  await expect(page.locator(".compact-date").first()).toHaveText("2026/11/10");
 });

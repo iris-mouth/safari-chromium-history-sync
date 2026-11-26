@@ -57,6 +57,11 @@ public struct HistoryReaderStatus: Codable, Sendable {
 
 /// Stateless read-only boundary shared by all HTTP operations.
 public struct HistoryReader: Sendable {
+    public enum Scope: Sendable {
+        case all
+        case range(start: String, end: String)
+    }
+
     public let databasePath: String
     public init(databasePath: String) { self.databasePath = databasePath }
     private static let zone = TimeZone(identifier: "Asia/Tokyo")!
@@ -65,6 +70,14 @@ public struct HistoryReader: Sendable {
                s.browser_type,s.profile_name,s.id,v.native_id
         FROM visits v JOIN sources s ON s.id=v.source_id
         """
+
+    func verifyAvailability(cancellation: HistoryReadCancellation) throws {
+        try snapshot(cancellation) { db in
+            let settings = try db.query("SELECT value FROM collection_settings WHERE key='enabled'")
+            guard try settings.step() else { throw HistoryReaderError.unavailable }
+            _ = try db.query(Self.select + " LIMIT 1").step()
+        }
+    }
 
     public func status(cancellation: HistoryReadCancellation? = nil) throws -> HistoryReaderStatus {
         try snapshot(cancellation) { db in
@@ -98,25 +111,27 @@ public struct HistoryReader: Sendable {
         }
     }
 
-    public func page(start: String, end: String, query: String = "", cursor: String? = nil,
+    public func page(scope: Scope, query: String = "", cursor: String? = nil,
                      limit: Int = 200, ids: [Int64] = [], anchor: Int64? = nil,
                      cancellation: HistoryReadCancellation? = nil) throws -> HistoryPage {
         guard query.count <= 1000, (1...500).contains(limit), ids.count <= 2000,
               ids.allSatisfy({ $0 > 0 }), anchor == nil || anchor! > 0,
               cursor == nil || cursor!.count <= 128 else { throw HistoryReaderError.invalid("入力条件を確認してください。") }
-        let startDate = try Self.parseDay(start)
-        let endDate = try Self.parseDay(end)
-        guard endDate >= startDate, let upper = Self.calendar.date(byAdding: .day, value: 1, to: endDate) else { throw HistoryReaderError.invalid("終了日は開始日以降にしてください。") }
         let terms = HistorySearch.normalize(query).split(whereSeparator: { $0.isWhitespace }).map(String.init)
         var whereSQL = "1=1"
         var args: [ReadValue] = []
         let candidate = terms.filter { $0.unicodeScalars.count >= 3 && !$0.unicodeScalars.contains(where: { $0.value == 0 }) }
             .max { $0.unicodeScalars.count < $1.unicodeScalars.count }
-        if terms.isEmpty {
+        if case let .range(start, end) = scope {
+            let startDate = try Self.parseDay(start)
+            let endDate = try Self.parseDay(end)
+            guard endDate >= startDate, let upper = Self.calendar.date(byAdding: .day, value: 1, to: endDate) else { throw HistoryReaderError.invalid("終了日は開始日以降にしてください。") }
             whereSQL += " AND v.visit_seconds>=? AND v.visit_seconds<?"
             args += [.integer(Int64(startDate.timeIntervalSince1970)), .integer(Int64(upper.timeIntervalSince1970))]
-        } else {
-            for term in terms { whereSQL += " AND (instr(v.norm_title,?)>0 OR instr(v.norm_url,?)>0)"; args += [.text(term), .text(term)] }
+        }
+        for term in terms {
+            whereSQL += " AND (instr(v.norm_title,?)>0 OR instr(v.norm_url,?)>0)"
+            args += [.text(term), .text(term)]
         }
         let decoded = try cursor.map(Self.decodeCursor)
         return try snapshot(cancellation) { db in

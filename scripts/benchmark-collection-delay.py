@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Measure the 30 s scan cadence on a temporary, synthetic browser DB."""
+import argparse
 import importlib.util
 import json
 import os
@@ -13,6 +14,10 @@ ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("bench", ROOT / "scripts/benchmark-integrated.py")
 bench = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(bench)
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--output", type=Path, required=True)
+args = parser.parse_args()
 
 with tempfile.TemporaryDirectory(prefix="history-delay-") as tmp:
     root = Path(tmp)
@@ -36,8 +41,8 @@ with tempfile.TemporaryDirectory(prefix="history-delay-") as tmp:
                 if viewer.poll() is not None: raise RuntimeError("viewer did not start")
                 time.sleep(.1)
         else: raise RuntimeError("viewer did not become ready")
-        old_url = "/api/records?start=2026-11-10&end=2026-11-10&q=site2.example.test%2Farticle&limit=200"
-        new_url = "/api/records?start=2026-11-10&end=2026-11-10&q=fresh-arrival.example.test&limit=200"
+        old_url = "/api/records?scope=all&q=site2.example.test%2Farticle&limit=200"
+        new_url = "/api/records?scope=all&q=fresh-arrival.example.test&limit=200"
         assert any(r["native_visit_id"] == 2 for r in bench.get(old_url)[1]["items"])
         with sqlite3.connect(source) as db:
             db.execute("INSERT INTO urls VALUES(1001,'https://fresh-arrival.example.test/page','Fresh arrival')")
@@ -55,7 +60,7 @@ with tempfile.TemporaryDirectory(prefix="history-delay-") as tmp:
             time.sleep(.5)
         result = {"conditions":"Synthetic 100,000-visit Chromium SQLite; a benchmark worker using the same 30-second full-scan interval as the Agent; localhost HTTP; one source; polling every 0.5 seconds. Timing begins immediately after the source transaction commits.", "new_visit_seconds":new_delay, "deletion_seconds":deletion_delay, "initial_collection_seconds":float(line.split()[1])}
         if new_delay is None or deletion_delay is None: raise RuntimeError("changes not observed within 80 seconds")
-        path = ROOT / "docs/validation/integrated-local-delay.json"
+        path = args.output
         path.write_text(json.dumps(result, indent=2) + "\n")
         print(json.dumps(result, indent=2), flush=True)
     finally:

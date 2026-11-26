@@ -1,5 +1,8 @@
 # Cutover preparation and result
 
+This record describes the build 624 migration. For the current gateway port and
+Full Disk Access setup, use the [development instructions](../../README.md#set-up-the-development-build).
+
 Before cutover, the independently managed `local.historysyncweb` LaunchAgent
 had `KeepAlive` and `RunAtLoad`, and the Tailscale Serve root on HTTPS 443
 forwarded to local 8765. Read-only inspection found one persistent root handler.

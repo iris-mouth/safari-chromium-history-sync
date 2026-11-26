@@ -1,9 +1,37 @@
-# Runtime state and logs contain private browsing-history URLs.
+# Local sync state and credentials.
 state.json
-state.json.tmp
-sync.log
+state.sealed
+state.sealed.new
+state.sealed.unresolved-count
+ipc.secret
+agent.sock
 *.log
 backups/
+
+# Browser and application databases, including SQLite sidecars.
+History
+History-wal
+History-shm
+History-journal
+Favicons
+Favicons-wal
+Favicons-shm
+Favicons-journal
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+*.sqlite3-journal
+!/tests/fixtures/*.db
+!/tests/fixtures/*.sqlite
+!/tests/fixtures/*.sqlite3
 
 # Local Safari backups created before plist writes.
 Bookmarks.plist.bak
@@ -37,6 +65,5 @@ io.github.irismouth.safari_chromium_history_sync.json
 
 # Web build and browser test artifacts.
 /web/node_modules/
-/web/dist/
 /web/test-results/
 /web/playwright-report/

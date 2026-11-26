@@ -24,6 +24,22 @@ public struct HistoryCollectionStatus: Codable, Equatable, Sendable {
     public let count: Int64
 }
 
+public struct CollectionOverview: Codable, Sendable {
+    public struct Source: Codable, Sendable {
+        public let id: String
+        public let browser: HistorySourceSnapshot.Browser
+        public let browserType: String
+        public let profileName: String
+        public let state: String
+        public let lastScan: Double?
+        public let lastLiveVisit: Double?
+    }
+
+    public let enabled: Bool
+    public let pair: HistoryCollector.Pair?
+    public let sources: [Source]
+}
+
 public enum HistoryCollectionError: Error {
     case invalidSource
     case unsafeDirectory
@@ -251,6 +267,36 @@ public final class HistoryCollector: @unchecked Sendable {
 
     public func sources() throws -> [HistoryCollectionSource] {
         try Self.readSources(HistoryWriteDB(path: databasePath, readOnly: true))
+    }
+
+    public func overview() throws -> CollectionOverview {
+        let reader = try HistoryWriteDB(path: databasePath, readOnly: true)
+        sqlite3_busy_timeout(reader.handle, 150)
+        try reader.exec("BEGIN")
+        let enabled = try reader.scalarInt("SELECT value='1' FROM collection_settings WHERE key='enabled'") != 0
+        let pair = try readPair(reader)
+        let receipt = try reader.prepare("SELECT value FROM collection_settings WHERE key='last_live_visit'")
+        let liveVisit = try receipt.step() ? receipt.text(0).flatMap {
+            try? JSONDecoder().decode(LiveVisitReceipt.self, from: Data($0.utf8))
+        } : nil
+        let rows = try reader.prepare("""
+            SELECT id,browser,browser_type,profile_name,state,last_success,generation
+            FROM sources ORDER BY id
+            """)
+        var sources: [CollectionOverview.Source] = []
+        while try rows.step() {
+            guard let id = rows.text(0), let rawBrowser = rows.text(1),
+                  let browser = HistorySourceSnapshot.Browser(rawValue: rawBrowser), let type = rows.text(2),
+                  let name = rows.text(3), let state = rows.text(4) else { throw HistoryCollectionError.incompatibleDatabase }
+            let lastLiveVisit = liveVisit.flatMap { evidence in
+                pair?.source == id && pair?.revision == evidence.revision && rows.text(6) == evidence.generation
+                    ? evidence.at : nil
+            }
+            sources.append(.init(id: id, browser: browser, browserType: type, profileName: name,
+                                 state: state, lastScan: rows.optionalDouble(5), lastLiveVisit: lastLiveVisit))
+        }
+        try reader.exec("COMMIT")
+        return .init(enabled: enabled, pair: pair, sources: sources)
     }
 
     public func statuses() throws -> [HistoryCollectionStatus] {
@@ -574,6 +620,13 @@ public final class HistoryCollector: @unchecked Sendable {
     public func candidateCount(queued: Set<String> = []) throws -> Int64 {
         try Self.pendingCount(HistoryWriteDB(path: databasePath, readOnly: true), queued: queued)
     }
+
+    private struct LiveVisitReceipt: Codable {
+        let revision: String
+        let generation: String
+        let at: Double
+    }
+
     public func collectReported(_ visits: [ReportedVisit], profile: String, revision: String) throws {
         try lock.withLock {
             guard try isEnabled(), let pair = try readPair(db), pair.extensionID == profile, pair.revision == revision,
@@ -582,7 +635,9 @@ public final class HistoryCollector: @unchecked Sendable {
             try row.bind([.text(source.id)])
             guard try row.step(), let generation = row.text(0), try HistorySourceReader.identity(source.path) == row.text(1) else { throw TypedError(code: "SOURCE_NOT_READY") }
             let origins = viewerOrigins + (try storedViewerOrigins()).compactMap(URL.init(string:))
+            let now = Date().timeIntervalSince1970
             try db.transaction {
+                var accepted = false
                 for visit in visits {
                     guard let id = Int64(visit.visitId), id > 0, let url = URL(string: visit.url),
                           ["https","http"].contains(url.scheme?.lowercased() ?? ""), url.host != nil,
@@ -596,6 +651,7 @@ public final class HistoryCollector: @unchecked Sendable {
                     try existing.bind([.text(source.id), .integer(id)])
                     if try existing.step() {
                         guard existing.text(0) == visit.url, abs(Double(existing.int64(1)) - Double(raw)) <= 1000 else { throw TypedError(code: "VISIT_CONFLICT") }
+                        accepted = true
                         continue
                     }
                     let t = try Self.time(.chromium(raw))
@@ -604,7 +660,16 @@ public final class HistoryCollector: @unchecked Sendable {
                         VALUES(?,?,?,?,?,?,?,?,?,?)
                         """).run([.text(source.id),.text(generation),.integer(id),.text(visit.url),visit.title.map(HistorySQLValue.text) ?? .null,
                                  .integer(raw),.integer(t.seconds),.real(t.fraction),.text(HistorySearch.normalize(visit.title ?? "")),.text(HistorySearch.normalize(visit.url))])
-                    try db.prepare("INSERT INTO api_visits VALUES(last_insert_rowid(),?)").run([.real(Date().timeIntervalSince1970)])
+                    try db.prepare("INSERT INTO api_visits VALUES(last_insert_rowid(),?)").run([.real(now)])
+                    accepted = true
+                }
+                if accepted {
+                    let receipt = LiveVisitReceipt(revision: revision, generation: generation, at: now)
+                    let json = String(decoding: try JSONEncoder().encode(receipt), as: UTF8.self)
+                    try db.prepare("""
+                        INSERT INTO collection_settings VALUES('last_live_visit',?)
+                        ON CONFLICT(key) DO UPDATE SET value=excluded.value
+                        """).run([.text(json)])
                 }
             }
         }

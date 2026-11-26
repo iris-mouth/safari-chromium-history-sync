@@ -33,18 +33,25 @@ enum HistoryCollectionTests {
         try expect(try reopened.statuses().reduce(0) { $0 + $1.count }, 4, "pause retains collected data")
         let reader = HistoryReader(databasePath: dbURL.path)
         try httpBoundary(reader: reader, directory: dir)
-        let first = try reader.page(start: "2000-01-01", end: "2099-12-31", limit: 2)
+        let first = try reader.page(scope: .all, limit: 2)
         try expect(first.items.count, 2, "reader page limit")
         guard let cursor = first.cursor else { throw IntegrationFailure.assertion("missing page cursor") }
-        let second = try reader.page(start: "2000-01-01", end: "2099-12-31", cursor: cursor, limit: 2, ids: first.items.map(\.id))
+        let second = try reader.page(scope: .all, cursor: cursor, limit: 2, ids: first.items.map(\.id))
         try expect(second.items.count, 2, "reader returns remaining equal-time rows")
         try expect(Set(first.items.map(\.id)).isDisjoint(with: Set(second.items.map(\.id))), true, "stable page does not duplicate")
         try expect(second.valid.count, 2, "loaded IDs revalidated")
         try expect(try reader.detail(id: first.items[0].id), first.items[0], "detail shares record semantics")
-        try expect(try reader.page(start: "2000-01-01", end: "2000-01-01", query: "REPEATED").items.count, 4, "search spans all dates")
-        try expect(try reader.page(start: "2000-01-01", end: "2000-01-01", query: "abc がっこう 1 kg").items.count, 1, "collector and reader normalize search identically")
+        try expect(try reader.page(scope: .all, query: "REPEATED").items.count, 4, "all-time search spans all dates")
+        let latestDay = HistoryReader.Scope.range(start: "2029-07-10", end: "2029-07-10")
+        let ids = (first.items + second.items).map(\.id)
+        let sameDay = try reader.page(scope: latestDay, query: "REPEATED", ids: ids)
+        try expect(sameDay.items.map(\.id), first.items.map(\.id), "date range limits matching records")
+        try expect(Set(sameDay.valid.map(\.id)), Set(first.items.map(\.id)), "date range revalidates saved IDs")
+        try expect(try reader.page(scope: latestDay, query: " ").items.count, 2, "blank keyword browses the selected day")
+        try expect(try reader.page(scope: latestDay, query: "abc がっこう 1 kg", ids: ids).valid.count, 1, "revalidation also applies the normalized keywords")
+        try expect(try reader.page(scope: .range(start: "2029-07-09", end: "2029-07-10"), query: "REPEATED").items.count, 3, "both dates in a range are included")
         try expect(try reader.status().sources.count, 2, "reader status exposes both sources")
-        do { _ = try reader.page(start: "not-a-day", end: "2000-01-01"); throw IntegrationFailure.assertion("invalid day accepted") }
+        do { _ = try reader.page(scope: .range(start: "not-a-day", end: "2000-01-01")); throw IntegrationFailure.assertion("invalid day accepted") }
         catch HistoryReaderError.invalid { }
         try collector.collectAll()
         try expect(try count(dbURL, "SELECT count(*) FROM visits"), 4, "repeat scan idempotent")
@@ -180,19 +187,19 @@ enum HistoryCollectionTests {
         let reader = HistoryReader(databasePath: target.path)
         let terms = ["abc+*\"", "かたかな", "😀😅😆", "a", "ab", "a+b", "not-present"]
         for term in terms {
-            let actual = Set(try reader.page(start: "2000-01-01", end: "2099-12-31", query: term).items.map(\.id))
+            let actual = Set(try reader.page(scope: .all, query: term).items.map(\.id))
             let expected = try rawSubstringMatches(target, term: HistorySearch.normalize(term))
             try expect(actual, expected, "FTS candidate and literal scan must agree for \(term)")
         }
         try fixture.exec("DELETE FROM history_visits WHERE id=2")
         try collector.collectAll()
-        try expect(try reader.page(start: "2000-01-01", end: "2099-12-31", query: "abc+*\"").items.count, 0, "search index removes deleted visits")
+        try expect(try reader.page(scope: .all, query: "abc+*\"").items.count, 0, "search index removes deleted visits")
         var old: OpaquePointer?
         guard sqlite3_open(target.path, &old) == SQLITE_OK, let old else { throw IntegrationFailure.assertion("open migration fixture") }
         let reset = "DROP TRIGGER visits_search_insert; DROP TRIGGER visits_search_delete; DROP TRIGGER visits_search_update; DROP TABLE visit_search; PRAGMA user_version=3"
         guard sqlite3_exec(old, reset, nil, nil, nil) == SQLITE_OK, sqlite3_close(old) == SQLITE_OK else { throw IntegrationFailure.assertion("prepare migration fixture") }
         _ = try HistoryCollector(databaseURL: target)
-        try expect(try HistoryReader(databasePath: target.path).page(start: "2000-01-01", end: "2099-12-31", query: "かたかな").items.count, 1, "migration rebuilds existing search index")
+        try expect(try HistoryReader(databasePath: target.path).page(scope: .all, query: "かたかな").items.count, 1, "migration rebuilds existing search index")
         try collector.configure([])
         try expect(try count(target, "SELECT count(*) FROM visit_search WHERE visit_search MATCH 'かたかな'"), 0, "deselection removes source search entries")
     }
@@ -252,7 +259,7 @@ enum HistoryCollectionTests {
         let collector = try HistoryCollector(databaseURL: target)
         try collector.configure([.init(id: "icons", browser: .chromium, browserType: "Chrome", profileName: "Default", path: browser.path)])
         try collector.collectAll()
-        let page = try HistoryReader(databasePath: target.path).page(start: "2000-01-01", end: "2099-12-31")
+        let page = try HistoryReader(databasePath: target.path).page(scope: .all)
         try expect(page.icons["icons.example"]?.hasPrefix("data:image/png;base64,"), true, "local Chromium icon exposed")
         try collector.configure([])
         try expect(try count(target, "SELECT count(*) FROM icons"), 0, "deselection removes source icons")
@@ -271,12 +278,14 @@ enum HistoryCollectionTests {
         let status = try request(server.port, path: "/api/status", owner: "owner@example.test")
         try expect(status.status, 200, "status is public through HTTP")
         try expect((status.body["sources"] as? [[String: Any]])?.count, 2, "HTTP status sources")
-        let page = try request(server.port, path: "/api/records?start=2000-01-01&end=2099-12-31&limit=2", owner: "owner@example.test")
+        let page = try request(server.port, path: "/api/records?scope=all&limit=2", owner: "owner@example.test")
         try expect(page.status, 200, "HTTP records succeeds")
         try expect((page.body["items"] as? [[String: Any]])?.count, 2, "HTTP page limit")
-        let search = try request(server.port, path: "/api/records?start=2000-01-01&end=2000-01-01&q=abc+%E3%81%8C%E3%81%A3%E3%81%93%E3%81%86+1+kg", owner: "owner@example.test")
+        let search = try request(server.port, path: "/api/records?scope=range&start=2029-07-10&end=2029-07-10&q=abc+%E3%81%8C%E3%81%A3%E3%81%93%E3%81%86+1+kg", owner: "owner@example.test")
         try expect((search.body["items"] as? [[String: Any]])?.count, 1, "HTTP form-encoded AND search")
-        try expect(try request(server.port, path: "/api/records?start=bad&end=2099-12-31", owner: "owner@example.test").status, 422, "invalid HTTP input")
+        for invalid in ["scope=range&start=bad&end=2099-12-31", "scope=range&start=2029-07-10&end=2029-07-09", "scope=range&start=2029-07-10", "scope=all&start=2029-07-10", "scope=unknown", "q=keyword"] {
+            try expect(try request(server.port, path: "/api/records?\(invalid)", owner: "owner@example.test").status, 422, "invalid HTTP scope or date range")
+        }
         try expect(try request(server.port, path: "/history.sqlite", owner: "owner@example.test").status, 404, "database is never served")
     }
 

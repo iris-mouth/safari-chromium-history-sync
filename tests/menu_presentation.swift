@@ -30,11 +30,60 @@ import ServiceManagement
         } catch is LoginItemRegistration.Unavailable { }
         let app = NSApplication.shared
         app.setActivationPolicy(.prohibited)
-        let delegate = MenuDelegate()
+        let collectionData = Data(#"{"enabled":true,"pair":{"source":"edge:preview","revision":"revision","extensionID":"edge:preview"},"sources":[{"id":"safari:default","browser":"safari","browserType":"Safari","profileName":"Default","state":"complete","lastScan":1730000000},{"id":"edge:preview","browser":"chromium","browserType":"Edge","profileName":"Work","state":"waiting","lastScan":1730000000,"lastLiveVisit":1730000030}]}"#.utf8)
+        let collection = try JSONDecoder().decode(CollectionOverview.self, from: collectionData)
+        let off = HealthSnapshot(enabled: false, syncRequested: false, activeProfileID: "edge:preview", runtimeState: "blocked",
+            issueCode: AgentIssueCode.safariAccessUnavailable, pendingBrowserToSafari: 0,
+            pendingSafariToBrowser: 2, recoveryCount: 1, unrecoverableCount: 0)
+        let snapshot = MenuStatusSnapshot(collection: collection, sync: off, extensionUpdateRequired: false)
+        var statusRequests: [String] = []
+        let delegate = MenuDelegate { command in
+            statusRequests.append(command.operation)
+            return try JSONEncoder().encode(snapshot)
+        }
         let menu = delegate.makeMenu()
-        let topActions = menu.items.compactMap { $0.action.map(NSStringFromSelector) }
-        precondition(topActions == ["openWeb", "showSyncStatus", "collectNow", "showSettings", "terminate:"])
+        let topActions = menu.items.filter { !$0.isHidden }.compactMap { $0.action.map(NSStringFromSelector) }
+        precondition(topActions == ["openViewerSettings", "showSettings", "terminate:"])
         precondition(menu.items.first { $0.keyEquivalent == "," }?.action == NSSelectorFromString("showSettings"))
+        precondition(MenuDelegate.statusImage(attention: false, description: "History Sync")?.isTemplate == true)
+        precondition(MenuDelegate.statusImage(attention: true, description: "History Sync")?.isTemplate == true)
+        delegate.menuWillOpen(menu)
+        for _ in 0..<20 { try await Task.sleep(for: .milliseconds(10)) }
+        precondition(statusRequests == ["menuStatus"], "menu loads one read-only overview")
+        let visible = menu.items.filter { !$0.isHidden }.map { $0.title }
+        precondition(visible.contains("Browser Sync · Off"))
+        precondition(visible.contains("Pending browser deliveries 2 · Automatic retries 1"))
+        precondition(visible.contains("History Collection · Waiting for Database"))
+        precondition(visible.contains { $0.contains("Edge · Work") })
+        precondition(visible.contains { $0.hasPrefix("Last visit received from extension") && !$0.contains("Unverified") })
+        precondition(visible.contains("Collect History Now"))
+        precondition(!visible.contains("Resolve Sync Issue…"), "an intentional OFF preference suppresses sync recovery")
+        let now = Date()
+        let localReady = MenuStatusPresentation(snapshot: snapshot, viewer: .ready(now), loading: false)
+        precondition(!localReady.collection.attention && !localReady.sync.attention && !localReady.viewer.attention)
+        precondition(localReady.viewer.actions == [.openHistory])
+        precondition(localReady.viewer.details.contains("Access from other devices is unverified"))
+        let unavailable = MenuStatusPresentation(snapshot: nil, viewer: .unavailable(lastReady: now), loading: false)
+        precondition(unavailable.viewer.actions == [.retryViewer, .viewerSettings] && unavailable.viewer.attention)
+        precondition(!unavailable.sync.attention)
+        let blocked = HealthSnapshot(enabled: false, syncRequested: true, activeProfileID: "edge:preview", runtimeState: "blocked",
+            issueCode: AgentIssueCode.historyIdentityChanged, pendingBrowserToSafari: 0,
+            pendingSafariToBrowser: 2, recoveryCount: 1, unrecoverableCount: 0)
+        let needsRecovery = MenuStatusPresentation(snapshot: .init(collection: collection, sync: blocked,
+            extensionUpdateRequired: false), viewer: .off, loading: false)
+        precondition(needsRecovery.sync.actions == [.resolveSync] && needsRecovery.sync.attention)
+        let syncSwitch = NSSwitch()
+        precondition(MenuDelegate.displaySyncPreference(blocked, canEnable: false, on: syncSwitch)
+            == "Browser sync is on. Delivery is paused.")
+        precondition(syncSwitch.state == .on && syncSwitch.isEnabled && !syncSwitch.isHidden,
+                     "a blocked delivery leaves the saved preference on and lets the user switch it off")
+        precondition(MenuDelegate.displaySyncPreference(off, canEnable: false, on: syncSwitch) == nil)
+        precondition(syncSwitch.state == .off && !syncSwitch.isEnabled && !syncSwitch.isHidden)
+        precondition(MenuDelegate.displaySyncPreference(off, canEnable: true, on: syncSwitch) == nil)
+        precondition(syncSwitch.state == .off && syncSwitch.isEnabled && !syncSwitch.isHidden)
+        precondition(MenuDelegate.displaySyncPreference(nil, canEnable: true, on: syncSwitch)
+            == "Saved browser sync setting is unavailable.")
+        precondition(!syncSwitch.isEnabled && syncSwitch.isHidden, "an unknown saved setting cannot be presented as off")
         let fakeHome = FileManager.default.temporaryDirectory.appendingPathComponent("profile-test-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: fakeHome) }
         let chrome = fakeHome.appendingPathComponent("Library/Application Support/Google/Chrome")
@@ -55,7 +104,6 @@ import ServiceManagement
         precondition(inaccessible.unavailableBrowsers.contains("Edge"), "access failures are reported")
         precondition(inaccessible.candidates.contains { $0.id == missing.id }, "an inaccessible source remains selected")
         precondition(!topActions.contains { $0.lowercased().contains("probe") })
-        let now = Date()
         var cloud = CloudDeliveryCoordinator()
         for index in 1...3 {
             try cloud.reserve(id: "synthetic-\(index)", profileID: "edge:preview", provider: .safari,
@@ -65,25 +113,6 @@ import ServiceManagement
         }
         cloud.setSafariAssist(enabled: true, now: now)
         let diagnostics = cloud.diagnostics(profileID: "edge:preview")
-        let health = HealthSnapshot(enabled: true, activeProfileID: "edge:preview", runtimeState: "ready",
-            connectedProfiles: [BrowserProfileDescriptor(profileID: "edge:preview", browserFamily: "edge",
-                displayName: "Microsoft Edge · 個人用プロファイル", extensionVersion: "6.1.4", lastSeen: now, active: true)],
-            pendingBrowserToSafari: 0, pendingSafariToBrowser: 2, recoveryCount: 1, unrecoverableCount: 0,
-            cloud: diagnostics.summary)
-        var statusRequests: [String] = []
-        let status = SyncStatusWindow { command in
-            statusRequests.append(command.operation)
-            if command.operation == "collectionStatus" { return Data(#"{"enabled":true,"sources":[],"statuses":[]}"#.utf8) }
-            precondition(["status", "cloudStatus"].contains(command.operation))
-            return try command.operation == "status" ? JSONEncoder().encode(health) : JSONEncoder().encode(diagnostics)
-        }
-        status.refresh()
-        for _ in 0..<20 { try await Task.sleep(for: .milliseconds(10)) }
-        precondition(statusRequests == ["collectionStatus", "status", "cloudStatus"])
-        let blocked = HealthSnapshot(enabled: true, activeProfileID: "edge:preview", runtimeState: "blocked",
-            issueCode: AgentIssueCode.historyIdentityChanged, pendingBrowserToSafari: 0,
-            pendingSafariToBrowser: 2, recoveryCount: 1, unrecoverableCount: 0)
-        status.display(health: blocked, diagnostics: nil)
         var diagnosticRequests: [String] = []
         let detailed = CloudDiagnosticsWindow(profileID: "edge:preview") { command in
             diagnosticRequests.append(command.operation)
@@ -99,8 +128,7 @@ import ServiceManagement
         disclosure.performClick(nil)
         precondition(testButtons.allSatisfy { !$0.isHiddenOrHasHiddenAncestor })
         precondition(diagnosticRequests == ["cloudStatus"], "expansion must not perform a test or repair")
-        status.close()
         detailed.close()
-        print("PASS: normal menu has status/settings and no test entry; status and diagnostics opening/expansion issued read-only commands; test actions are initially hidden")
+        print("PASS: three menu domains, independent statuses and direct actions; menu and diagnostics use read-only commands")
     }
 }

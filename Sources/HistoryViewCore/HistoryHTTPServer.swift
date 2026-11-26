@@ -128,9 +128,25 @@ public final class HistoryHTTPServer: @unchecked Sendable {
             guard params[item.name] == nil else { throw HistoryReaderError.invalid("入力条件が重複しています。") }
             params[item.name] = item.value ?? ""
         }
+        if path == "/api/ready" {
+            guard FileManager.default.isReadableFile(atPath: assets.appendingPathComponent("index.html").path) else {
+                throw HistoryReaderError.unavailable
+            }
+            try reader.verifyAvailability(cancellation: cancellation)
+            return try jsonResponse(["ready": true])
+        }
         if path == "/api/status" { return try jsonResponse(reader.status(cancellation: cancellation)) }
         if path == "/api/records" {
-            guard let start = params["start"], let end = params["end"] else { throw HistoryReaderError.invalid("日付が必要です。") }
+            let scope: HistoryReader.Scope
+            switch params["scope"] {
+            case "all" where params["start"] == nil && params["end"] == nil:
+                scope = .all
+            case "range":
+                guard let start = params["start"], let end = params["end"] else { throw HistoryReaderError.invalid("日付が必要です。") }
+                scope = .range(start: start, end: end)
+            default:
+                throw HistoryReaderError.invalid("入力条件を確認してください。")
+            }
             let limit: Int
             if let raw = params["limit"] { guard let n = Int(raw) else { throw HistoryReaderError.invalid("件数が不正です。") }; limit = n } else { limit = 200 }
             let idsText = params["ids"] ?? ""
@@ -140,7 +156,7 @@ public final class HistoryHTTPServer: @unchecked Sendable {
             guard ids.count == pieces.count else { throw HistoryReaderError.invalid("履歴IDが不正です。") }
             let anchor: Int64?
             if let raw = params["anchor"] { guard let n = Int64(raw) else { throw HistoryReaderError.invalid("履歴IDが不正です。") }; anchor = n } else { anchor = nil }
-            return try jsonResponse(reader.page(start: start, end: end, query: params["q"] ?? "", cursor: params["cursor"], limit: limit, ids: ids, anchor: anchor, cancellation: cancellation))
+            return try jsonResponse(reader.page(scope: scope, query: params["q"] ?? "", cursor: params["cursor"], limit: limit, ids: ids, anchor: anchor, cancellation: cancellation))
         }
         if path.hasPrefix("/api/records/") {
             guard let id = Int64(path.dropFirst("/api/records/".count)) else { throw HistoryReaderError.invalid("履歴IDが不正です。") }

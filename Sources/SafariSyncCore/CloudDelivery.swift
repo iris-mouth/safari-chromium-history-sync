@@ -118,6 +118,7 @@ public struct CloudSummary: Codable, Equatable, Sendable {
     public let suppressed: Int
     public let expiredUnverified: Int
     public let capacityReached: Bool
+    public let lastLocalDeliveryAt: Date?
 }
 
 public struct CloudRepairPlan: Codable, Equatable, Sendable {
@@ -472,7 +473,8 @@ public struct CloudDeliveryCoordinator: Codable, Equatable, Sendable {
                 && !$0.suppressed && $0.remoteState != "seen" }.count,
             remoteSeen: records.filter { $0.remoteState == "seen" }.count,
             suppressed: records.filter(\.suppressed).count, expiredUnverified: expiredUnverified,
-            capacityReached: deliveries.count >= Self.capacity)
+            capacityReached: deliveries.count >= Self.capacity,
+            lastLocalDeliveryAt: records.lazy.filter { !$0.suppressed }.compactMap(\.localAppliedAt).max())
     }
 
     public func diagnostics(profileID: String?, plan: CloudRepairPlan? = nil, afterID: String? = nil) -> CloudDiagnostics {

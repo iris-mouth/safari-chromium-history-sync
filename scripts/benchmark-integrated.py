@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Synthetic local benchmark; Python is a development-only fixture generator."""
+import argparse
 import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -68,12 +69,18 @@ def run(count, root):
                 time.sleep(.1)
         else:
             raise RuntimeError("viewer did not become ready")
-        date_path = "/api/records?start=2026-11-10&end=2026-11-10&limit=200"
-        search_path = "/api/records?" + urllib.parse.urlencode({"start":"2026-11-10", "end":"2026-11-10", "q":"abc がっこう 1 kg", "limit":"200"})
+        date_path = "/api/records?scope=range&start=2026-11-10&end=2026-11-10&limit=200"
+        search_path = "/api/records?" + urllib.parse.urlencode({"scope":"all", "q":"abc がっこう 1 kg", "limit":"200"})
+        range_search_path = search_path + "&scope=range&start=2026-11-10&end=2026-11-10"
+        range_search_path = range_search_path.replace("scope=all&", "")
+        lower = int((datetime(2026, 11, 10, tzinfo=ZoneInfo("Asia/Tokyo")).timestamp() + 11644473600) * 1000000)
+        upper = lower + 86400 * 1000000
+        with sqlite3.connect(source) as db:
+            range_matches = db.execute("SELECT count(*) FROM visits WHERE url=1 AND visit_time>=? AND visit_time<?", (lower, upper)).fetchone()[0]
         results = {}
-        for label, path in (("day", date_path), ("search", search_path)):
+        for label, path in (("day", date_path), ("search", search_path), ("all", "/api/records?scope=all&limit=200"), ("range_search", range_search_path)):
             samples = [get(path) for _ in range(4)]
-            expected = 200 if label == "day" else min(count // 1000, 200)
+            expected = min(range_matches, 200) if label == "range_search" else min(count // 1000, 200) if label == "search" else 200
             if any(len(sample[1]["items"]) != expected for sample in samples):
                 raise RuntimeError(f"unexpected {label} result count; timing is invalid")
             results[label] = {"seconds": [round(s[0], 4) for s in samples], "median_seconds": round(statistics.median(s[0] for s in samples), 4), "items": len(samples[-1][1]["items"]), "response_bytes": samples[-1][2]}
@@ -87,12 +94,15 @@ def run(count, root):
 
 
 if __name__ == "__main__":
-    document = {"conditions": {"date_local":datetime.now(ZoneInfo("Asia/Tokyo")).date().isoformat(), "platform":platform.platform(), "machine":platform.machine(), "python":platform.python_version(), "network":"localhost; separate Swift Viewer process", "cache":"fixture generation warms filesystem cache; four sequential requests", "search_wait_ms":300, "note":"Local synthetic measurement, not an iPhone or Tailscale target measurement."}, "results":[]}
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args()
+    document = {"conditions": {"date_local":datetime.now(ZoneInfo("Asia/Tokyo")).date().isoformat(), "platform":platform.platform(), "machine":platform.machine(), "python":platform.python_version(), "network":"localhost; separate Swift Viewer process", "cache":"fixture generation warms filesystem cache; four sequential requests", "search_wait_ms":0, "note":"Local synthetic measurement, not an iPhone or Tailscale target measurement."}, "results":[]}
     with tempfile.TemporaryDirectory(prefix="integrated-history-benchmark-") as tmp:
         for count in (100000, 1000000):
             print(f"Generating and collecting {count} synthetic visits...", flush=True)
             document["results"].append(run(count, Path(tmp)))
             print(json.dumps(document["results"][-1], ensure_ascii=False), flush=True)
-    path = ROOT / "docs/validation/integrated-local-benchmark.json"
+    path = args.output
     path.write_text(json.dumps(document, indent=2, ensure_ascii=False) + "\n")
     print(f"Wrote {path}")

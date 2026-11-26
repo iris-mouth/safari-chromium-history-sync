@@ -55,6 +55,7 @@ static int ownsForward(int pid, int senderPort, int listenerPort) {
 import "C"
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/tls"
@@ -81,6 +82,44 @@ import (
 const cli = "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
 
 type settings struct{ Origin, Owner, Viewer, Database, Assets string }
+
+type readinessReply struct {
+	Request uint64 `json:"request"`
+	Ready   bool   `json:"ready"`
+}
+
+func viewerReady(ctx context.Context, client *http.Client, owner string) bool {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://localhost/api/ready", nil)
+	if err != nil {
+		return false
+	}
+	request.Header.Set("Tailscale-User-Login", owner)
+	response, err := client.Do(request)
+	if err != nil {
+		return false
+	}
+	defer response.Body.Close()
+	_, err = io.Copy(io.Discard, io.LimitReader(response.Body, 16*1024))
+	return err == nil && response.StatusCode == http.StatusOK
+}
+
+func reportReadiness(input io.Reader, output io.Writer, client *http.Client, owner string) {
+	requests := bufio.NewScanner(input)
+	requests.Buffer(make([]byte, 64), 64)
+	encoder := json.NewEncoder(output)
+	for requests.Scan() {
+		request, err := strconv.ParseUint(requests.Text(), 10, 64)
+		if err != nil {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		ready := viewerReady(ctx, client, owner)
+		cancel()
+		if encoder.Encode(readinessReply{Request: request, Ready: ready}) != nil {
+			return
+		}
+	}
+}
 
 func fromTailscale(c net.Conn) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -167,6 +206,10 @@ func (a *access) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if r.URL.Path == "/api/ready" {
+		http.NotFound(w, r)
+		return
+	}
 	a.proxy.ServeHTTP(w, r)
 }
 func run() error {
@@ -213,16 +256,17 @@ func run() error {
 	}
 	defer child.Process.Kill()
 	stopped := make(chan struct{}, 1)
-	go func() { io.Copy(io.Discard, os.Stdin); stopped <- struct{}{} }()
 	go func() { child.Wait(); stopped <- struct{}{} }()
 	target := &url.URL{Scheme: "http", Host: "localhost"}
+	transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "unix", sock)
+	}}
+	defer transport.CloseIdleConnections()
 	proxy := &httputil.ReverseProxy{Rewrite: func(r *httputil.ProxyRequest) {
 		r.SetURL(target)
 		r.Out.Header.Del("Cookie")
 		r.Out.Header.Set("Tailscale-User-Login", cfg.Owner)
-	}, Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-		return (&net.Dialer{}).DialContext(ctx, "unix", sock)
-	}}}
+	}, Transport: transport}
 	a := &access{settings: cfg, proxy: proxy}
 	var mu sync.Mutex
 	var cert *tls.Certificate
@@ -259,6 +303,13 @@ func run() error {
 	l := &verifiedListener{ln, requests, done}
 	go srv.Serve(l)
 	defer func() { close(done); srv.Close() }()
+	go func() {
+		client := &http.Client{Transport: transport, CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		}}
+		reportReadiness(os.Stdin, os.Stdout, client, cfg.Owner)
+		stopped <- struct{}{}
+	}()
 	slots := make(chan struct{}, 32)
 	go func() {
 		for {

@@ -1,10 +1,10 @@
 # Compatibility policy
 
-## Development build 620
+## Integrated development build
 
-Build 620 adds independent collection and a separate Viewer. It is under
-validation and does not inherit end-to-end evidence from build 614 or earlier;
-`testedRuntimes` remains empty. See [integration status](INTEGRATION-IMPLEMENTATION-STATUS.md).
+The default `testedRuntimes` is empty. Each build's device record identifies
+the sync, collection, or Viewer behavior exercised on that build.
+[Mac and iPhone validation records](INTEGRATION-IMPLEMENTATION-STATUS.md).
 
 ## Development build 614
 
@@ -55,7 +55,7 @@ Schema and state validation run at startup and on history operations. New Safari
 
 Identical structures do not prove unchanged Safari/iCloud behavior. The meaning of `origin`, generation scheduling, arrival ordering, or cloud upload behavior could change without changing the DB layout. Compatible-unverified use explicitly accepts that uncertainty. Local insertion and a cloud-trigger attempt are not proof that a visit reached iPhone Safari.
 
-The existing arrival-anchor, database-identity, idempotency, and delivery-evidence checks remain active. They catch the anomalies they model; they do not detect every possible change in Apple's internal behavior. Compatibility failure preserves queues and does not silently switch to one-way synchronization. Independently qualifying a read-only Safari adapter remains future work.
+The existing arrival-anchor, database-identity, idempotency, and delivery-evidence checks remain active. A compatibility failure stops both sync directions and preserves the queues. Collection reports each source's read status separately.
 
 ## Reference environment and test evidence
 
@@ -66,7 +66,7 @@ For build 601, `CompatibilityGate.testedRuntimes` contained the macOS 27 referen
 To record an environment as tested:
 
 1. Record the source commit/package hash, date, CPU, Xcode/SDK, macOS/Safari identity, and tested Chrome/Edge versions. Include the schema reference and any fixture changes.
-2. Run `./scripts/check.sh` and package verification. On a designated Mac with the legacy writer stopped, install the current package and complete Setup & Diagnostics.
+2. Run `./scripts/check.sh` and package verification. On a designated Mac with the legacy writer stopped, install the package and complete the [development setup](../README.md#set-up-the-development-build).
 3. Test Chrome and Edge separately, keeping exactly one active profile; confirm the inactive profile receives no visits. Verify browser → Mac Safari → iPhone Safari and iPhone Safari → Mac Safari → browser with synthetic URLs.
 4. Verify echo suppression, later real visits to the same URL, offline/delayed arrivals, profile-scoped pending work, and Safari/Agent/Mac restart recovery. Record local commits, trigger attempts, and observed iPhone arrivals separately.
 5. Save a sanitized report with PASS/FAIL/NOT RUN outcomes. Add only completed evidence to `testedRuntimes`. Do not publish raw DBs, sealed state, delivery ledgers, personal URLs, or account identifiers.

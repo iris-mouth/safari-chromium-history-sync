@@ -13,7 +13,7 @@ Where did setup stop?
 - Selecting Chrome, Edge, or both:
 - Loading the revealed unpacked extension folder:
 - Approving Open at Login:
-- Granting Full Disk Access to `Safari Chromium History Sync Agent.app`:
+- Granting Full Disk Access (the development build uses `Safari Chromium History Sync.app`):
 - Detecting or selecting a connected profile:
 
 ## Environment
@@ -22,10 +22,10 @@ Where did setup stop?
 - Safari version:
 - Browser:
 - Safari Chromium History Sync version:
-- Browser selected in Setup & Diagnostics: yes/no
+- Browsers selected in Settings:
 
-## Setup & Diagnostics
+## Status
 
-Open **Setup & Diagnostics** from the menu app and describe the exact status or
-message shown. Do not attach private URLs, sealed state, browser profiles, or
+Describe the status shown in the menu or settings for your build.
+Do not attach private URLs, sealed state, browser profiles, or
 Safari database files.

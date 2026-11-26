@@ -20,8 +20,9 @@ Describe the sync behavior you expected and what happened instead.
 
 ## Diagnostics
 
-Open **Setup & Diagnostics** and include the exact status or message shown.
-State whether the pending or recovery counts are nonzero. Do not include URLs.
+Include the status or message shown in the menu or settings for the affected
+feature. For a delivery issue, include the relevant pending or recovery counts
+from browser sync diagnostics. Omit private URLs.
 
 ## Notes
 
