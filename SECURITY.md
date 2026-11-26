@@ -1,40 +1,21 @@
 # Security
 
-The Agent handles private browser history on the Mac. The optional Web Viewer serves
-the collected history over HTTPS to the configured Tailscale user.
+The app handles private browser history. Its files under
+`~/Library/Application Support/Safari Chromium History Sync/`, browser databases,
+and SQLite journals can contain URLs, titles, icons, or delivery records.
+The viewing database is ordinary SQLite, not encrypted by this app. Sync state
+is encrypted using a Keychain secret; this does not encrypt the viewing database.
 
-## Sensitive data
+Grant Full Disk Access to the parent app only. The embedded Agent reads browser
+databases and writes Safari visits when browser sync is enabled. The separate,
+sandboxed Viewer reads only collected data. Local IPC trusts the current macOS
+user; it is not a boundary against other programs running as that user.
 
-These files contain private browsing data. SQLite journals can contain it too.
+The HTTPS gateway requires the configured Tailscale identity. Its local health
+check does not verify access from another device. Compatibility checks likewise
+do not prove that Safari or Chromium delivered history through its cloud service.
 
-- `~/Library/Application Support/Safari Chromium History Sync/state.sealed`
-- `~/Library/Application Support/Safari Chromium History Sync/delivery-ledger.sqlite`
-- `~/Library/Application Support/Safari Chromium History Sync/Viewing/history.sqlite`
-- `~/Library/Safari/History.db`
-- A selected Chrome or Edge profile's `History` and `Favicons` databases
-
-The viewing database contains URLs, titles, and icons in ordinary SQLite.
-Reports can use synthetic rows or a schema-only fixture.
-
-## Access boundaries
-
-- Grant Full Disk Access to `/Applications/Safari Chromium History Sync.app`.
-  The embedded Agent reads the selected browser databases and writes Safari
-  visits when syncing. [Parent-only access validation](docs/validation/extension-632.md).
-- The Bridge and Menu authenticate to the Agent over a mode-`0600` Unix socket.
-  The Agent checks the caller's role, HMAC, and nonce. The IPC key in
-  `ipc.secret` has mode `0600`, so this boundary trusts the current macOS user.
-- The Agent seals its sync state with AES-GCM using its Keychain root secret.
-- Safari history sync is intentionally narrow and insert-only.
-- Incompatible runtime requirements, database structures, and sync-generation state fail closed. Unknown OS/Safari builds or binary hashes alone do not block use.
-- Tested and compatible-but-unverified environments are distinguished in diagnostics. Structural compatibility does not prove unchanged Safari/iCloud semantics. See [compatibility policy](docs/COMPATIBILITY.md).
-- Browser extension permissions are limited to history, storage, alarms, and native messaging.
-- The gateway accepts forwarded connections from the signed Tailscale App Store
-  network extension. It checks the kernel-reported sender, looks up the forwarded
-  peer's Tailscale identity, and requires the configured owner. It obtains the
-  TLS certificate in memory and proxies requests over a private Unix socket to
-  the sandboxed, read-only Viewer.
-
-## Reporting
-
-Open a GitHub issue with a minimal reproduction that avoids private URLs when possible. If a private sample is required, describe the shape of the data instead of posting the raw file.
+For a report, provide a minimal reproduction with synthetic URLs and sanitized
+status messages. Do not attach browser databases, sealed state, delivery ledgers,
+account identifiers, or screenshots containing private history. Describe the data's
+shape when an issue cannot be reproduced with a synthetic sample.

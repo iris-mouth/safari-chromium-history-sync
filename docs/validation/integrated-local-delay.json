@@ -1,6 +1,0 @@
-{
-  "conditions": "Synthetic 100,000-visit Chromium SQLite; a benchmark worker using the same 30-second full-scan interval as the Agent; localhost HTTP; one source; polling every 0.5 seconds. Timing begins immediately after the source transaction commits.",
-  "new_visit_seconds": 31.401577458978863,
-  "deletion_seconds": 31.466962791979313,
-  "initial_collection_seconds": 4.1417824999953154
-}

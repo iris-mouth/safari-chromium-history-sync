@@ -1,63 +1,45 @@
 # Contributing
 
-## Build and test on macOS
+## Build and test
 
-Install the Apple command-line tools, Go, Node.js 22.18 or later, and Python 3.
-The installed app runs without Node.js or Python. Run the checks and build the
-package from the repository root.
+Use macOS with Apple command-line tools, Go, Node.js 22.18 or later, and Python 3.
+The installed app does not require Node.js or Python.
 
 ```sh
 npm --prefix web ci
+web/node_modules/.bin/playwright install chromium webkit
 ./scripts/check.sh
-swift build --product SafariSyncViewer
+swift build --disable-sandbox
 npm --prefix web run build
 npm --prefix web test
 ./scripts/package-app.sh
 ```
 
-If Playwright needs browser binaries, run
-`web/node_modules/.bin/playwright install chromium webkit` after `npm ci`.
-Playwright serves a temporary synthetic database on `127.0.0.1:18766`.
-The project checks exercise AppKit with in-memory replies, the gateway, the
-extension, and the public Agent and Reader interfaces.
+The package is written to `dist/`. Follow the [app setup](README.md#install).
+Update Japanese and English strings together when changing the interface.
 
-The unsigned PKG in `dist/` installs one ad-hoc-signed app in `/Applications`
-with its Agent, gateway, and sandboxed Viewer inside. Follow the
-[setup instructions](README.md#set-up-the-app).
-For setup changes, exercise Chrome only, Edge only, and both browsers. Check
-that an unselected browser receives no Native Messaging directory or manifest.
-Update the Japanese and English strings together when changing the interface.
+## Test data
 
-## Verify history and Viewer changes
+Use synthetic histories for routine tests. The independent
+[Safari schema fixture](tests/fixtures/safari-history-v1.sql) was captured from a
+local Safari backup on 2026-09-22 without browsing rows or metadata values;
+keep it independent of the production schema definition.
 
-Use synthetic browser histories for routine tests. The Safari SQL fixture
-records real table constraints without browsing data. When changing the
-adapter, check both equivalent layouts and layouts the writer must reject.
-[Schema fixture](tests/fixtures/safari-history-v1.sql) and
-[compatibility policy](docs/COMPATIBILITY.md).
+Optional process tests require the installed Agent to be stopped. Set
+`HISTORY_TEST_AGENT` and `HISTORY_TEST_VIEWER` to isolated debug executable paths
+when running `SafariSyncCoreIntegrationTests`. The fixtures use temporary state
+and local sockets. For a manual copied-database test, also isolate
+`SAFARI_SYNC_HISTORY_PATH`, `SAFARI_SYNC_STATE_DIR`, and `SAFARI_SYNC_SOCKET_PATH`.
 
-The optional process tests exercise an isolated debug Agent and Viewer,
-including interrupted collection, restart, and owner shutdown. Run these on a
-test Mac with the installed Agent stopped. Set `HISTORY_TEST_AGENT` and
-`HISTORY_TEST_VIEWER` to their absolute debug executable paths when running
-`SafariSyncCoreIntegrationTests`. The fixture uses temporary state and needs
-permission to bind local sockets.
+For Viewer performance changes, measure physical iPhone Safari over Tailscale
+with synthetic data. At 100,000 visits, target 1 second for dates and 2 seconds
+from search submission to results; compare 1,000,000 visits under the same
+conditions. Record device, network, cache state, and query in the issue or release.
+Report local insertion, native sync progress, and receiving-device arrival separately.
 
-For a manual copied-database test, stop the installed Agent first. Set `SAFARI_SYNC_HISTORY_PATH`,
-`SAFARI_SYNC_STATE_DIR`, and `SAFARI_SYNC_SOCKET_PATH` to isolated test paths.
+## Changes
 
-Measure Viewer changes on physical iPhone Safari through Tailscale with
-synthetic data. At 100,000 visits the targets are 1 second for a date view and
-2 seconds from search submission to the first results. Compare 1,000,000 visits
-under the same conditions. Record device, cache state, network, and query.
-Older device timings started at the last keystroke and included a 300 ms wait.
-For local API timings, set `HISTORY_BENCH_BIN` and `HISTORY_VIEWER_BIN` to the
-built `HistoryBenchmark` and `SafariSyncViewer` executables. Run
-`scripts/benchmark-integrated.py --output /tmp/history-benchmark.json`.
-[Previous device measurements](docs/validation/build-630.md).
-
-## Open a pull request
-
-Describe what changed, why, and how you verified it. Identify any browser API
-limitation and whether the test touched live history. Share sanitized evidence.
-[Private data and reporting](SECURITY.md).
+Explain the problem, why the change is needed, and how it was verified in the PR
+and commits. Keep enduring setup guidance here; use issues and releases for
+work logs and validation results. Do not add documents that repeat code or history.
+Share only sanitized evidence; see [Security](SECURITY.md).
