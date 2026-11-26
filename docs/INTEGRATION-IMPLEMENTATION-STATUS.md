@@ -15,8 +15,11 @@ source visit identity and previously held entries. The installed Edge store
 contained no entries eligible for deletion. The [extension validation record](validation/extension-632.md)
 distinguishes the synthetic deletion test from that observation.
 
-The owner approved the Viewer cutover with browser sync off and deferred an
-actual logout and login with pending extension work. [Cutover record](validation/integration-cutover.md).
+The owner approved the Viewer cutover with browser sync off. Login restoration
+was subsequently verified on build 635 with sync off and empty delivery queues;
+restoration with pending extension work remains untested and is tracked in
+[issue #2](https://github.com/iris-mouth/safari-chromium-history-sync/issues/2).
+[Cutover record](validation/integration-cutover.md).
 
 ## Candidate 633 local API measurements
 
@@ -31,8 +34,8 @@ fixture generation warmed the filesystem cache.
 | 1,000,000 | `5d25b9d` baseline | 113 | 114 | Not measured | Not measured |
 | 1,000,000 | 633 | 109 | 112 | 108 | 32 |
 
-These timings cover only the API. Physical iPhone timings for the new search
-interaction are pending. Earlier device timings include a 300 ms input delay.
+These timings cover only the API. No physical iPhone timings were recorded for
+build 633; build 635 measurements appear below. Earlier device timings include a 300 ms input delay.
 [Viewer test conditions](../CONTRIBUTING.md#verify-history-and-viewer-changes).
 
 Candidate 633 also passed the extension, Go gateway, Swift integration and AppKit
@@ -122,3 +125,11 @@ requirement after the first re-registration. Stopping the app and renewing that
 registration restored complete Safari and Edge scans. Agent initialization also
 completed after its Keychain wait: runtime ready, no issue, and saved/effective
 browser sync off. The normal HTTPS status endpoint returned 200.
+
+On November 26, the owner logged out and back in without manually opening the app.
+New Menu, Agent, gateway and Viewer processes started at 23:14 JST, and both
+collection sources completed fresh scans. Agent was ready with no issue, sync off
+and empty delivery queues. The first HTTPS check failed DNS resolution; Tailscale
+DNS recovered without intervention, after which the normal page, status and
+records endpoints returned 200. This verifies automatic restoration with sync
+off, not delivery recovery with pending work.

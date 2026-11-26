@@ -1,14 +1,15 @@
 # Safari Chromium History Sync
 
-Sync new visits between Safari and one Google Chrome or Microsoft Edge profile
-on your Mac. The development build also lets you collect and search the history
-in those browsers while browser sync is off.
+Collect and search the history in Safari and one Google Chrome or Microsoft Edge
+profile on your Mac, including from your iPhone over Tailscale. Optionally sync
+new visits between that pair of browsers. Collection and viewing work while
+browser sync is off.
 
-## Download the sync-only release
+## Download
 
-The published v6.1.4 prerelease (build 614) runs on Apple silicon Macs with
-macOS 26.6.2 or later. This release has an English interface.
-[Download v6.1.4](https://github.com/iris-mouth/safari-chromium-history-sync/releases/tag/v6.1.4).
+The v6.2.0 experimental prerelease (build 635) runs on Apple silicon Macs with
+macOS 26.6.2 or later. The Mac app and Web Viewer support Japanese and English.
+[Download v6.2.0](https://github.com/iris-mouth/safari-chromium-history-sync/releases/tag/v6.2.0).
 
 Download the `.pkg` installer and `SHA256SUMS.txt` into the same folder and check the download.
 
@@ -17,11 +18,11 @@ shasum -a 256 -c SHA256SUMS.txt
 ```
 
 The installer is unsigned and the apps are ad-hoc signed, without Apple
-notarization. See the [release notes](docs/RELEASE-v6.1.4.md) before installing.
+notarization. See the [release notes](docs/RELEASE-v6.2.0.md) before installing.
 
-## Set up the development build
+## Set up the app
 
-1. Quit the menu app before upgrading. Install the development PKG. It places
+1. Quit the menu app before upgrading. Install the PKG. It places
    **Safari Chromium History Sync.app** in `/Applications` with its helpers inside.
 2. Open **Safari Chromium History Sync**, then open **Settings… → General**.
 3. Select Chrome Stable, Edge Stable, or both, then click **Register and open extension pages**.
@@ -38,6 +39,11 @@ notarization. See the [release notes](docs/RELEASE-v6.1.4.md) before installing.
    report new visits while the browser is open.
 7. To sync new visits between browsers, stop any legacy Python writer, wait for
    both initial collections to finish, then enable **Browser Sync**.
+
+If an upgrade leaves collection reporting access unavailable, quit the app,
+remove its old Full Disk Access entry, add the installed parent app again, and
+reopen it. The embedded Agent does not need a separate entry. Approve the
+**SafariSyncAgent** Keychain request if macOS asks to read the saved sync state.
 
 ## Use the menu
 
@@ -60,6 +66,8 @@ When a section needs attention, choose its recovery action or open its settings.
 To send new visits to your iPhone or iPad, use the matching browser account
 and enable its built-in history sync on each device. Check the receiving
 device's history to confirm arrival.
+Incoming iPhone Safari history becomes searchable after iCloud delivers it to
+Safari on the Mac; collection does not force that delivery.
 
 ## Open the Viewer over Tailscale
 
@@ -96,6 +104,9 @@ Set the language for each browser in the Viewer.
   original visit time.
 - This is experimental software. Compatibility checks do not guarantee cloud
   delivery. See [supported conditions and validation](docs/COMPATIBILITY.md).
+- Login restoration was verified with browser sync off and empty delivery
+  queues. [Validation with pending deliveries](https://github.com/iris-mouth/safari-chromium-history-sync/issues/2)
+  remains open.
 
 ## More information
 

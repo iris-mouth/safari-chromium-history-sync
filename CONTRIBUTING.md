@@ -23,7 +23,7 @@ extension, and the public Agent and Reader interfaces.
 
 The unsigned PKG in `dist/` installs one ad-hoc-signed app in `/Applications`
 with its Agent, gateway, and sandboxed Viewer inside. Follow the
-[development setup instructions](README.md#set-up-the-development-build).
+[setup instructions](README.md#set-up-the-app).
 For setup changes, exercise Chrome only, Edge only, and both browsers. Check
 that an unselected browser receives no Native Messaging directory or manifest.
 Update the Japanese and English strings together when changing the interface.
