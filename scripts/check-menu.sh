@@ -23,6 +23,8 @@ swiftc "${SWIFT_OPTIONS[@]}" -parse-as-library -I "$MENU_CHECK_TMP" \
   "$ROOT/Sources/SafariSyncMenu/CollectionSettings.swift" \
   "$ROOT/Sources/SafariSyncMenu/LoginItemRegistration.swift" \
   "$ROOT/Sources/SafariSyncMenu/MenuStatusPresentation.swift" \
+  "$ROOT/Sources/SafariSyncMenu/ViewerReadinessStream.swift" \
   "$ROOT/Sources/SafariSyncMenu/CloudDiagnosticsWindow.swift" \
   "$ROOT/tests/menu_presentation.swift" -o "$MENU_CHECK_TMP/MenuPresentationTests"
-"$MENU_CHECK_TMP/MenuPresentationTests"
+"$MENU_CHECK_TMP/MenuPresentationTests" "$MENU_CHECK_TMP/completed"
+test -f "$MENU_CHECK_TMP/completed"

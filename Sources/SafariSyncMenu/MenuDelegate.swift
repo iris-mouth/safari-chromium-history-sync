@@ -54,11 +54,6 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWin
         var lastChecked: TimeInterval?
     }
 
-    private struct ViewerReply: Decodable, Sendable {
-        let request: UInt64
-        let ready: Bool
-    }
-
     private var viewerSession: ViewerSession?
     private var viewerReadiness: ViewerReadiness = .off
     private var viewerChanging = false
@@ -931,18 +926,8 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWin
         renderStatus()
         let reader = output.fileHandleForReading
         Task.detached(priority: .utility) { [weak self] in
-            defer { try? reader.close() }
-            var buffer = Data()
-            while let bytes = try? reader.read(upToCount: 512), !bytes.isEmpty {
-                buffer.append(bytes)
-                while let newline = buffer.firstIndex(of: 10) {
-                    let frame = buffer.prefix(upTo: newline)
-                    if let reply = try? JSONDecoder().decode(ViewerReply.self, from: frame) {
-                        await self?.receiveViewerReadiness(reply, session: id)
-                    }
-                    buffer.removeSubrange(...newline)
-                }
-                if buffer.count > 512 { break }
+            await ViewerReadinessStream.consume(reader) { [weak self] reply in
+                await self?.receiveViewerReadiness(reply, session: id)
             }
             await self?.viewerOutputEnded(id)
         }
@@ -970,7 +955,7 @@ final class MenuDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWin
         }
     }
 
-    private func receiveViewerReadiness(_ reply: ViewerReply, session id: UUID) {
+    private func receiveViewerReadiness(_ reply: ViewerReadinessReply, session id: UUID) {
         guard var session = viewerSession, session.id == id, session.pendingRequest == reply.request else { return }
         session.pendingRequest = nil
         if reply.ready, session.process.isRunning {

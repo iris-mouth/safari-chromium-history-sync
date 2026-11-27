@@ -2,13 +2,22 @@ import AppKit
 import SafariSyncCore
 import ServiceManagement
 
+private actor ReadinessInbox {
+    var replies: [ViewerReadinessReply] = []
+    func append(_ reply: ViewerReadinessReply) { replies.append(reply) }
+}
+
 @main @MainActor struct PresentationCheck {
     static func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
     static func main() {
         let app = NSApplication.shared
         app.setActivationPolicy(.prohibited)
         Task {
-            do { try await runChecks(); exit(0) }
+            do {
+                try await runChecks()
+                try Data("complete\n".utf8).write(to: URL(fileURLWithPath: CommandLine.arguments[1]))
+                exit(0)
+            }
             catch {
                 FileHandle.standardError.write(Data("AppKit tests failed: \(error)\n".utf8))
                 exit(1)
@@ -19,6 +28,7 @@ import ServiceManagement
     }
 
     static func runChecks() async throws {
+        try await checkViewerReadinessStream()
         var loginStatus = SMAppService.Status.notFound
         var registrations = 0
         let registered = try LoginItemRegistration.ensure(status: { loginStatus }, register: {
@@ -221,6 +231,46 @@ import ServiceManagement
         precondition(testButtons.allSatisfy { !$0.isHiddenOrHasHiddenAncestor })
         precondition(diagnosticRequests == ["cloudStatus"], "expansion must not perform a test or repair")
         detailed.close()
-        print("PASS: compact menu, settings navigation and ownership, read-only refresh, drafts and isolated actions")
+        print("PASS: compact menu, settings navigation and ownership, read-only refresh, drafts, isolated actions and live Viewer replies")
+    }
+
+    static func checkViewerReadinessStream() async throws {
+        let pipe = Pipe()
+        let inbox = ReadinessInbox()
+        let reader = Task.detached {
+            await ViewerReadinessStream.consume(pipe.fileHandleForReading) { await inbox.append($0) }
+        }
+        defer { try? pipe.fileHandleForWriting.close() }
+        func waitForReplies(_ count: Int) async throws {
+            for _ in 0..<100 {
+                if await inbox.replies.count == count { return }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            preconditionFailure("Viewer replies must arrive while its output pipe remains open")
+        }
+        try pipe.fileHandleForWriting.write(contentsOf: Data("{\"request\":1,".utf8))
+        try await Task.sleep(for: .milliseconds(20))
+        let partial = await inbox.replies
+        precondition(partial.isEmpty, "an incomplete reply cannot mark the Viewer ready")
+        try pipe.fileHandleForWriting.write(contentsOf: Data("\"ready\":true}\n".utf8))
+        try await waitForReplies(1)
+        try pipe.fileHandleForWriting.write(contentsOf: Data("invalid\n{\"request\":2,\"ready\":false}\n{\"request\":3,\"ready\":true}\n".utf8))
+        try await waitForReplies(3)
+        try pipe.fileHandleForWriting.write(contentsOf: Data("{\"request\":4,\"ready\":true}".utf8))
+        try pipe.fileHandleForWriting.close()
+        await reader.value
+        let replies = await inbox.replies
+        precondition(replies == [.init(request: 1, ready: true), .init(request: 2, ready: false), .init(request: 3, ready: true)])
+
+        let oversized = Pipe()
+        let rejected = ReadinessInbox()
+        let oversizedReader = Task.detached {
+            await ViewerReadinessStream.consume(oversized.fileHandleForReading) { await rejected.append($0) }
+        }
+        try oversized.fileHandleForWriting.write(contentsOf: Data((String(repeating: " ", count: 513) + "{\"request\":1,\"ready\":true}\n").utf8))
+        try oversized.fileHandleForWriting.close()
+        await oversizedReader.value
+        let rejectedReplies = await rejected.replies
+        precondition(rejectedReplies.isEmpty, "oversized replies cannot mark the Viewer ready")
     }
 }
